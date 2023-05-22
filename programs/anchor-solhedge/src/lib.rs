@@ -15,15 +15,17 @@
     You should have received a copy of the GNU Affero General Public License
     along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
-use anchor_lang::{prelude::*, solana_program};
-use anchor_spl::token::{self, Mint, Token, TokenAccount};
+use anchor_lang::{prelude::*};
+use anchor_spl::token::{Mint, Token, TokenAccount};
 use anchor_spl::associated_token::AssociatedToken;
 
 declare_id!("8DYMPBKLDULX6G7ZuNrs1FcjuMqJwefu2MEfxkCq4sWY");
 
 /// Seed for put option vault factory info account
 const PUT_VAULT_FACTORY_SEED_PREFIX: &[u8] = b"putovfactinfo";
-const USER_PUT_OPTION_VAULT_PARAMS : &[u8] = b"uputovparams";
+
+const MAKER_COMISSION_PERCENT: f64 = 0.1;
+const TAKER_COMISSION_PERCENT: f64 = 0.1;
 
 #[program]
 pub mod anchor_solhedge {
@@ -38,29 +40,72 @@ pub mod anchor_solhedge {
 pub struct Initialize {}
 
 #[derive(Accounts)]
-pub struct CreatePutOptionVault<'info> {
-    #[account(init_if_needed, seeds=[PUT_VAULT_FACTORY_SEED_PREFIX, base_asset_mint.key().as_ref(), quote_asset_mint.key().as_ref(), &vault_params.maturity.to_le_bytes(), &vault_params.strike.to_le_bytes()], bump, payer = initializer, space= std::mem::size_of::<PutOptionVaultFactoryInfo>() + 8)]
+#[instruction(
+    maturity: u64, 
+    strike: f64,
+    max_makers: u16,
+    max_takers: u16,
+    min_order_lot: f64,
+    min_ticker_increment: f32,
+    num_lots_to_sell: u64,
+    premium_limit: f64
+)]
+pub struct MakerCreatePutOptionVault<'info> {
+    #[account(
+        init_if_needed, 
+        seeds=[PUT_VAULT_FACTORY_SEED_PREFIX, base_asset_mint.key().as_ref(), quote_asset_mint.key().as_ref(), &maturity.to_le_bytes(), &strike.to_le_bytes()], 
+        bump, 
+        payer = initializer, 
+        space= std::mem::size_of::<PutOptionVaultFactoryInfo>() + 8,
+        constraint = strike > 0.0
+    )]
     pub vault_factory_info: Account<'info, PutOptionVaultFactoryInfo>,
 
     #[account(
-        mut,
-        seeds=[USER_PUT_OPTION_VAULT_PARAMS, initializer.key().as_ref(), base_asset_mint.key().as_ref(), quote_asset_mint.key().as_ref(), &vault_params.maturity.to_le_bytes(), &vault_params.strike.to_le_bytes()],
-        bump,
-        constraint = initializer.key() == vault_params.creator,
-        constraint = vault_params.strike > 0.0,
-        constraint = vault_params.min_order_size > 0.0,
-        constraint = vault_params.min_ticker_increment > 0.0,
-        close = initializer
+        init,
+        payer = initializer, 
+        space= std::mem::size_of::<PutOptionVaultInfo>() + 8
     )]
-    pub vault_params: Account<'info, UserPutOptionVaultParams>,
+    pub vault_info: Account<'info, PutOptionVaultInfo>,
 
-    // mint is required to create new account for PDA and for checking
+
+    // mint for the base_asset
     pub base_asset_mint: Account<'info, Mint>,
 
-    // mint is required to create new account for PDA and for checking
+    // mint for the quote asset
     pub quote_asset_mint: Account<'info, Mint>,
 
-    
+    #[account(
+        init,
+        payer = initializer, // Payer will be initializer
+        associated_token::mint = base_asset_mint, 
+        associated_token::authority = vault_factory_info // Authority set to PDA
+    )]
+    pub vault_base_asset_treasury: Account<'info, TokenAccount>,
+
+    #[account(
+        init,
+        payer = initializer, // Payer will be initializer
+        associated_token::mint = quote_asset_mint, // Quote asset mint
+        associated_token::authority = vault_factory_info // Authority set to vault PDA
+    )]
+    pub vault_quote_asset_treasury: Account<'info, TokenAccount>,
+
+    #[account(
+        mut,
+        constraint = maker_quote_asset_account.owner.key() == initializer.key(),
+        constraint = maker_quote_asset_account.mint == quote_asset_mint.key(),
+        constraint = maker_quote_asset_account.amount as f64 / 10.0f64.powi(quote_asset_mint.decimals as i32)  >= ((num_lots_to_sell as f64)*min_order_lot*strike)/(1.0-(MAKER_COMISSION_PERCENT/100.0))
+    )]
+    pub maker_quote_asset_account: Account<'info, TokenAccount>,
+
+    #[account(
+        init,
+        payer = initializer,
+        space = std::mem::size_of::<PutOptionMakerInfo>() + 8
+    )]
+    pub put_option_maker_info: Account<'info, PutOptionMakerInfo>,
+
 
     // Check if initializer is signer, mut is required to reduce lamports (fees)
     #[account(mut)]
@@ -71,15 +116,13 @@ pub struct CreatePutOptionVault<'info> {
     // Token Program required to call transfer instruction
     pub token_program: Program<'info, Token>,
     pub associated_token_program: Program<'info, AssociatedToken>,
-
-
 }
 
 #[account]
 pub struct PutOptionVaultFactoryInfo {
     is_initialized: bool,
 
-    num_vaults: u32,
+    num_vaults: u64,
     maturity: u64,
     strike: f64,
     base_asset: Pubkey,
@@ -87,15 +130,32 @@ pub struct PutOptionVaultFactoryInfo {
 }
 
 #[account]
-pub struct UserPutOptionVaultParams {
-    creator: Pubkey,
-    base_asset: Pubkey,
-    quote_asset: Pubkey,
-    maturity: u64,
-    strike: f64,
+pub struct PutOptionVaultInfo {
+    factory_vault: Pubkey,
+
+    ord: u64,
     max_makers: u16,
     max_takers: u16,
-    min_order_size: f64,
-    min_ticker_increment: f32    
+    min_order_lot: f64,
+    min_ticker_increment: f32,
+
+    makers_num: u16,
+    makers_total_pending_sell: f64,
+    makers_total_pending_settle: f64,
+    is_makers_full: bool,
+
+    takers_num: u16,
+    takers_total_deposited: f64,
+    is_takers_full: bool
 }
 
+#[account]
+pub struct PutOptionMakerInfo {
+    ord: u64,
+    quote_asset_qty: f64,
+    volume_sold: f64,
+    is_settled: bool,
+    premium_limit: f64,
+    owner: Pubkey,
+    put_option_vault: Pubkey
+}
