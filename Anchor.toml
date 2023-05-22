@@ -30,3 +30,14 @@ wallet = "/home/srmq/.config/solana/id.json"
 
 [scripts]
 test = "yarn run ts-mocha -p ./tsconfig.json -t 1000000 tests/**/*.ts"
+
+[[test.validator.account]]
+address = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v"
+filename = "usdc-mock.json"
+
+[[test.validator.account]]
+address = "3NZ9JMVBmGAqocybic2c7LQCJScmgsAZ6vQqTDzcqmJh"
+filename = "wbtc-mock.json"
+
+[test]
+startup_wait = 1000000
