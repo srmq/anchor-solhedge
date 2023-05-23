@@ -16,13 +16,10 @@
     along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 use anchor_lang::{prelude::*};
-use anchor_spl::token::{Mint, Token, TokenAccount};
+use anchor_spl::token::{self, Mint, Token, TokenAccount};
 use anchor_spl::associated_token::AssociatedToken;
 
 declare_id!("8DYMPBKLDULX6G7ZuNrs1FcjuMqJwefu2MEfxkCq4sWY");
-
-/// Seed for put option vault factory info account
-const PUT_VAULT_FACTORY_SEED_PREFIX: &[u8] = b"putovfactinfo";
 
 const MAKER_COMISSION_PERCENT: f64 = 0.1;
 const TAKER_COMISSION_PERCENT: f64 = 0.1;
@@ -30,10 +27,80 @@ const TAKER_COMISSION_PERCENT: f64 = 0.1;
 #[program]
 pub mod anchor_solhedge {
     use super::*;
+    use anchor_spl::token::Transfer;
 
-    pub fn initialize(ctx: Context<Initialize>) -> Result<()> {
+    pub fn initialize(_ctx: Context<Initialize>) -> Result<()> {
         Ok(())
     }
+
+    pub fn maker_create_put_option_vault(ctx: Context<MakerCreatePutOptionVault>,
+        maturity: u64, 
+        strike: u64,
+        max_makers: u16,
+        max_takers: u16,
+        lot_size: u64,
+        min_ticker_increment: f32,
+        num_lots_to_sell: u64,
+        premium_limit: u64
+    ) -> Result<()> {
+        // Initializing factory vault (PutOptionVaultFactoryInfo) if it has been just created
+        if !ctx.accounts.vault_factory_info.is_initialized {
+            ctx.accounts.vault_factory_info.num_vaults = 0;
+            ctx.accounts.vault_factory_info.maturity = maturity;
+            ctx.accounts.vault_factory_info.strike = strike;
+            ctx.accounts.vault_factory_info.base_asset = ctx.accounts.base_asset_mint.key();
+            ctx.accounts.vault_factory_info.quote_asset = ctx.accounts.quote_asset_mint.key();
+
+            ctx.accounts.vault_factory_info.is_initialized = true;
+            msg!("PutOptionVaultFactoryInfo initialized");
+        }
+
+        // Initializing this new vault (PutOptionVaultInfo)
+        // and updating number of vaults in factory
+        msg!("Started initialization of PutOptionVaultInfo");
+        ctx.accounts.vault_info.factory_vault = ctx.accounts.vault_factory_info.key();
+        ctx.accounts.vault_factory_info.num_vaults += 1;
+        ctx.accounts.vault_info.ord = ctx.accounts.vault_factory_info.num_vaults;
+        ctx.accounts.vault_info.max_makers = max_makers;
+        ctx.accounts.vault_info.max_takers = max_takers;
+        ctx.accounts.vault_info.lot_size = lot_size;
+        ctx.accounts.vault_info.min_ticker_increment = min_ticker_increment;
+
+        // Proceed to transfer (still initializing vault)
+        let cpi_program = ctx.accounts.token_program.to_account_info();
+        let cpi_accounts = Transfer {
+            from: ctx.accounts.maker_quote_asset_account.to_account_info(),
+            to: ctx.accounts.vault_quote_asset_treasury.to_account_info(),
+            authority: ctx.accounts.initializer.to_account_info(),
+        };
+        let token_transfer_context = CpiContext::new(cpi_program, cpi_accounts);
+        let transfer_amount = lot_size*num_lots_to_sell*strike;
+        token::transfer(token_transfer_context, transfer_amount)?;
+        msg!("Transferred {} USDC lamports to quote asset treasury", transfer_amount);
+
+        // Continuing to initialize vault...
+        ctx.accounts.vault_info.makers_num = 1;
+        ctx.accounts.vault_info.makers_total_pending_sell = transfer_amount;
+        ctx.accounts.vault_info.makers_total_pending_settle = transfer_amount;
+        ctx.accounts.vault_info.is_makers_full = ctx.accounts.vault_info.makers_num >= ctx.accounts.vault_info.max_makers; 
+        ctx.accounts.vault_info.takers_num = 0;
+        ctx.accounts.vault_info.takers_total_deposited = 0;
+        ctx.accounts.vault_info.is_takers_full = ctx.accounts.vault_info.takers_num >= ctx.accounts.vault_info.max_takers;
+        msg!("Finished initialization of PutOptionVaultInfo, now initializing PutOptionMakerInfo");
+
+        // Now initializing info about this maker in the vault (PutOptionMakerInfo)
+        ctx.accounts.put_option_maker_info.ord = ctx.accounts.vault_info.makers_num;
+        ctx.accounts.put_option_maker_info.quote_asset_qty = transfer_amount;
+        ctx.accounts.put_option_maker_info.volume_sold = 0;
+        ctx.accounts.put_option_maker_info.is_settled = false;
+        ctx.accounts.put_option_maker_info.premium_limit = premium_limit;
+        ctx.accounts.put_option_maker_info.owner = ctx.accounts.maker_quote_asset_account.owner;
+        ctx.accounts.put_option_maker_info.put_option_vault = ctx.accounts.vault_info.key();
+        msg!("Vault initialization finished");
+        
+        Ok(())
+    }
+
 }
 
 #[derive(Accounts)]
@@ -42,22 +109,22 @@ pub struct Initialize {}
 #[derive(Accounts)]
 #[instruction(
     maturity: u64, 
-    strike: f64,
+    strike: u64,
     max_makers: u16,
     max_takers: u16,
-    min_order_lot: f64,
+    lot_size: u64,
     min_ticker_increment: f32,
     num_lots_to_sell: u64,
-    premium_limit: f64
+    premium_limit: u64
 )]
 pub struct MakerCreatePutOptionVault<'info> {
     #[account(
         init_if_needed, 
-        seeds=[PUT_VAULT_FACTORY_SEED_PREFIX, base_asset_mint.key().as_ref(), quote_asset_mint.key().as_ref(), &maturity.to_le_bytes(), &strike.to_le_bytes()], 
+        seeds=["PutOptionVaultFactoryInfo".as_bytes().as_ref(), base_asset_mint.key().as_ref(), quote_asset_mint.key().as_ref(), &maturity.to_le_bytes(), &strike.to_le_bytes()], 
         bump, 
         payer = initializer, 
         space= std::mem::size_of::<PutOptionVaultFactoryInfo>() + 8,
-        constraint = strike > 0.0
+        constraint = strike > 0
     )]
     pub vault_factory_info: Account<'info, PutOptionVaultFactoryInfo>,
 
@@ -81,7 +148,7 @@ pub struct MakerCreatePutOptionVault<'info> {
         associated_token::mint = base_asset_mint, 
         associated_token::authority = vault_factory_info // Authority set to PDA
     )]
-    pub vault_base_asset_treasury: Account<'info, TokenAccount>,
+    pub vault_base_asset_treasury: Box<Account<'info, TokenAccount>>,
 
     #[account(
         init,
@@ -89,15 +156,15 @@ pub struct MakerCreatePutOptionVault<'info> {
         associated_token::mint = quote_asset_mint, // Quote asset mint
         associated_token::authority = vault_factory_info // Authority set to vault PDA
     )]
-    pub vault_quote_asset_treasury: Account<'info, TokenAccount>,
+    pub vault_quote_asset_treasury: Box<Account<'info, TokenAccount>>,
 
     #[account(
         mut,
         constraint = maker_quote_asset_account.owner.key() == initializer.key(),
         constraint = maker_quote_asset_account.mint == quote_asset_mint.key(),
-        constraint = maker_quote_asset_account.amount as f64 / 10.0f64.powi(quote_asset_mint.decimals as i32)  >= ((num_lots_to_sell as f64)*min_order_lot*strike)/(1.0-(MAKER_COMISSION_PERCENT/100.0))
+        //constraint = maker_quote_asset_account.amount as f64 / 10.0f64.powi(quote_asset_mint.decimals as i32)  >= ((num_lots_to_sell as f64)*lot_size*strike)/(1.0-(MAKER_COMISSION_PERCENT/100.0))
     )]
-    pub maker_quote_asset_account: Account<'info, TokenAccount>,
+    pub maker_quote_asset_account: Box<Account<'info, TokenAccount>>,
 
     #[account(
         init,
@@ -124,7 +191,7 @@ pub struct PutOptionVaultFactoryInfo {
 
     num_vaults: u64,
     maturity: u64,
-    strike: f64,
+    strike: u64,
     base_asset: Pubkey,
     quote_asset: Pubkey
 }
@@ -136,26 +203,26 @@ pub struct PutOptionVaultInfo {
     ord: u64,
     max_makers: u16,
     max_takers: u16,
-    min_order_lot: f64,
+    lot_size: u64,
     min_ticker_increment: f32,
 
     makers_num: u16,
-    makers_total_pending_sell: f64,
-    makers_total_pending_settle: f64,
+    makers_total_pending_sell: u64,
+    makers_total_pending_settle: u64,
     is_makers_full: bool,
 
     takers_num: u16,
-    takers_total_deposited: f64,
+    takers_total_deposited: u64,
     is_takers_full: bool
 }
 
 #[account]
 pub struct PutOptionMakerInfo {
-    ord: u64,
-    quote_asset_qty: f64,
-    volume_sold: f64,
+    ord: u16,
+    quote_asset_qty: u64,
+    volume_sold: u64,
     is_settled: bool,
-    premium_limit: f64,
+    premium_limit: u64,
     owner: Pubkey,
     put_option_vault: Pubkey
 }
