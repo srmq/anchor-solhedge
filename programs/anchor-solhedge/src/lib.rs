@@ -21,8 +21,8 @@ use anchor_spl::associated_token::AssociatedToken;
 
 declare_id!("8DYMPBKLDULX6G7ZuNrs1FcjuMqJwefu2MEfxkCq4sWY");
 
-const MAKER_COMISSION_PERCENT: f64 = 0.1;
-const TAKER_COMISSION_PERCENT: f64 = 0.1;
+//const MAKER_COMISSION_PERCENT: f64 = 0.1;
+//const TAKER_COMISSION_PERCENT: f64 = 0.1;
 
 #[program]
 pub mod anchor_solhedge {
@@ -33,38 +33,42 @@ pub mod anchor_solhedge {
         Ok(())
     }
 
-    pub fn maker_create_put_option_vault(ctx: Context<MakerCreatePutOptionVault>,
-        maturity: u64, 
-        strike: u64,
-        max_makers: u16,
-        max_takers: u16,
-        lot_size: u64,
-        min_ticker_increment: f32,
-        num_lots_to_sell: u64,
-        premium_limit: u64
-    ) -> Result<()> {
+    pub fn maker_next_put_option_vault_id(ctx: Context<MakerNextPutOptionVaultId>,
+        params: MakerCreatePutOptionParams
+    ) -> Result<u64> {
         // Initializing factory vault (PutOptionVaultFactoryInfo) if it has been just created
         if !ctx.accounts.vault_factory_info.is_initialized {
-            ctx.accounts.vault_factory_info.num_vaults = 0;
-            ctx.accounts.vault_factory_info.maturity = maturity;
-            ctx.accounts.vault_factory_info.strike = strike;
+            ctx.accounts.vault_factory_info.next_vault_id = 1;
+            ctx.accounts.vault_factory_info.maturity = params.maturity;
+            ctx.accounts.vault_factory_info.matured = false; //XXX FIXME check if maturity is in the future
+            ctx.accounts.vault_factory_info.strike = params.strike;
             ctx.accounts.vault_factory_info.base_asset = ctx.accounts.base_asset_mint.key();
             ctx.accounts.vault_factory_info.quote_asset = ctx.accounts.quote_asset_mint.key();
 
             ctx.accounts.vault_factory_info.is_initialized = true;
             msg!("PutOptionVaultFactoryInfo initialized");
         }
+        let result = ctx.accounts.vault_factory_info.next_vault_id;
+        ctx.accounts.vault_factory_info.next_vault_id += 1;
+
+        Ok(result)
+    }
+
+    pub fn maker_create_put_option_vault(ctx: Context<MakerCreatePutOptionVault>,
+        params: MakerCreatePutOptionParams, vault_id: u64
+    ) -> Result<()> {
+
+        //XXX FIXME check if maturity is in the future
 
         // Initializing this new vault (PutOptionVaultInfo)
         // and updating number of vaults in factory
         msg!("Started initialization of PutOptionVaultInfo");
         ctx.accounts.vault_info.factory_vault = ctx.accounts.vault_factory_info.key();
-        ctx.accounts.vault_factory_info.num_vaults += 1;
-        ctx.accounts.vault_info.ord = ctx.accounts.vault_factory_info.num_vaults;
-        ctx.accounts.vault_info.max_makers = max_makers;
-        ctx.accounts.vault_info.max_takers = max_takers;
-        ctx.accounts.vault_info.lot_size = lot_size;
-        ctx.accounts.vault_info.min_ticker_increment = min_ticker_increment;
+        ctx.accounts.vault_info.ord = vault_id;
+        ctx.accounts.vault_info.max_makers = params.max_makers;
+        ctx.accounts.vault_info.max_takers = params.max_takers;
+        ctx.accounts.vault_info.lot_size = params.lot_size;
+        ctx.accounts.vault_info.min_ticker_increment = params.min_ticker_increment;
 
         // Proceed to transfer (still initializing vault)
         let cpi_program = ctx.accounts.token_program.to_account_info();
@@ -74,7 +78,7 @@ pub mod anchor_solhedge {
             authority: ctx.accounts.initializer.to_account_info(),
         };
         let token_transfer_context = CpiContext::new(cpi_program, cpi_accounts);
-        let transfer_amount = lot_size*num_lots_to_sell*strike;
+        let transfer_amount = params.lot_size*params.num_lots_to_sell*params.strike;
         token::transfer(token_transfer_context, transfer_amount)?;
         msg!("Transferred {} USDC lamports to quote asset treasury", transfer_amount);
 
@@ -93,7 +97,7 @@ pub mod anchor_solhedge {
         ctx.accounts.put_option_maker_info.quote_asset_qty = transfer_amount;
         ctx.accounts.put_option_maker_info.volume_sold = 0;
         ctx.accounts.put_option_maker_info.is_settled = false;
-        ctx.accounts.put_option_maker_info.premium_limit = premium_limit;
+        ctx.accounts.put_option_maker_info.premium_limit = params.premium_limit;
         ctx.accounts.put_option_maker_info.owner = ctx.accounts.maker_quote_asset_account.owner;
         ctx.accounts.put_option_maker_info.put_option_vault = ctx.accounts.vault_info.key();
         msg!("Vault initialization finished");
@@ -108,33 +112,63 @@ pub struct Initialize {}
 
 #[derive(Accounts)]
 #[instruction(
-    maturity: u64, 
-    strike: u64,
-    max_makers: u16,
-    max_takers: u16,
-    lot_size: u64,
-    min_ticker_increment: f32,
-    num_lots_to_sell: u64,
-    premium_limit: u64
+    params: MakerCreatePutOptionParams
+)]
+pub struct MakerNextPutOptionVaultId<'info> {
+    #[account(
+        init_if_needed, 
+        seeds=["PutOptionVaultFactoryInfo".as_bytes().as_ref(), base_asset_mint.key().as_ref(), quote_asset_mint.key().as_ref(), &params.maturity.to_le_bytes().as_ref(), &params.strike.to_le_bytes().as_ref()], 
+        bump, 
+        payer = initializer, 
+        space= std::mem::size_of::<PutOptionVaultFactoryInfo>() + 8,        
+        constraint = params.strike > 0
+    )]
+    pub vault_factory_info: Account<'info, PutOptionVaultFactoryInfo>,
+
+    // mint for the base_asset
+    pub base_asset_mint: Account<'info, Mint>,
+
+    // mint for the quote asset
+    pub quote_asset_mint: Account<'info, Mint>,
+
+    // Check if initializer is signer, mut is required to reduce lamports (fees)
+    #[account(mut)]
+    pub initializer: Signer<'info>,
+    // System Program requred for deduction of lamports (fees)
+    pub system_program: Program<'info, System>
+}
+
+#[derive(Accounts)]
+#[instruction(
+    params: MakerCreatePutOptionParams, 
+    vault_id: u64
 )]
 pub struct MakerCreatePutOptionVault<'info> {
     #[account(
-        init_if_needed, 
-        seeds=["PutOptionVaultFactoryInfo".as_bytes().as_ref(), base_asset_mint.key().as_ref(), quote_asset_mint.key().as_ref(), &maturity.to_le_bytes(), &strike.to_le_bytes()], 
+        seeds=["PutOptionVaultFactoryInfo".as_bytes().as_ref(), base_asset_mint.key().as_ref(), quote_asset_mint.key().as_ref(), &params.maturity.to_le_bytes().as_ref(), &params.strike.to_le_bytes().as_ref()], 
         bump, 
-        payer = initializer, 
-        space= std::mem::size_of::<PutOptionVaultFactoryInfo>() + 8,
-        constraint = strike > 0
+        constraint = params.strike > 0,
+        constraint = vault_factory_info.is_initialized == true,
+        constraint = vault_factory_info.base_asset == base_asset_mint.key(),
+        constraint = vault_factory_info.quote_asset == quote_asset_mint.key(),
+        constraint = vault_factory_info.maturity == params.maturity,
+        constraint = vault_factory_info.strike == params.strike,
     )]
     pub vault_factory_info: Account<'info, PutOptionVaultFactoryInfo>,
 
     #[account(
         init,
+        seeds=[
+            "PutOptionVaultInfo".as_bytes().as_ref(), 
+            vault_factory_info.key().as_ref(),
+            &vault_id.to_le_bytes().as_ref()
+        ],
+        bump,
         payer = initializer, 
+        constraint = vault_id < vault_factory_info.next_vault_id,
         space= std::mem::size_of::<PutOptionVaultInfo>() + 8
     )]
     pub vault_info: Account<'info, PutOptionVaultInfo>,
-
 
     // mint for the base_asset
     pub base_asset_mint: Account<'info, Mint>,
@@ -146,7 +180,7 @@ pub struct MakerCreatePutOptionVault<'info> {
         init,
         payer = initializer, // Payer will be initializer
         associated_token::mint = base_asset_mint, 
-        associated_token::authority = vault_factory_info // Authority set to PDA
+        associated_token::authority = vault_info // Authority set to PDA
     )]
     pub vault_base_asset_treasury: Box<Account<'info, TokenAccount>>,
 
@@ -154,9 +188,23 @@ pub struct MakerCreatePutOptionVault<'info> {
         init,
         payer = initializer, // Payer will be initializer
         associated_token::mint = quote_asset_mint, // Quote asset mint
-        associated_token::authority = vault_factory_info // Authority set to vault PDA
+        associated_token::authority = vault_info // Authority set to vault PDA
     )]
     pub vault_quote_asset_treasury: Box<Account<'info, TokenAccount>>,
+
+    #[account(
+        init,
+        seeds=[
+            "PutOptionMakerInfo".as_bytes().as_ref(),
+            vault_factory_info.key().as_ref(),
+            &vault_id.to_le_bytes().as_ref(), 
+            initializer.key().as_ref()
+        ],
+        bump,
+        payer = initializer,
+        space = std::mem::size_of::<PutOptionMakerInfo>() + 8
+    )]
+    pub put_option_maker_info: Account<'info, PutOptionMakerInfo>,
 
     #[account(
         mut,
@@ -165,14 +213,6 @@ pub struct MakerCreatePutOptionVault<'info> {
         //constraint = maker_quote_asset_account.amount as f64 / 10.0f64.powi(quote_asset_mint.decimals as i32)  >= ((num_lots_to_sell as f64)*lot_size*strike)/(1.0-(MAKER_COMISSION_PERCENT/100.0))
     )]
     pub maker_quote_asset_account: Box<Account<'info, TokenAccount>>,
-
-    #[account(
-        init,
-        payer = initializer,
-        space = std::mem::size_of::<PutOptionMakerInfo>() + 8
-    )]
-    pub put_option_maker_info: Account<'info, PutOptionMakerInfo>,
-
 
     // Check if initializer is signer, mut is required to reduce lamports (fees)
     #[account(mut)]
@@ -189,8 +229,9 @@ pub struct MakerCreatePutOptionVault<'info> {
 pub struct PutOptionVaultFactoryInfo {
     is_initialized: bool,
 
-    num_vaults: u64,
+    next_vault_id: u64,
     maturity: u64,
+    matured: bool,
     strike: u64,
     base_asset: Pubkey,
     quote_asset: Pubkey
@@ -225,4 +266,16 @@ pub struct PutOptionMakerInfo {
     premium_limit: u64,
     owner: Pubkey,
     put_option_vault: Pubkey
+}
+
+#[derive(AnchorSerialize, AnchorDeserialize, Clone, Copy)]
+pub struct MakerCreatePutOptionParams {
+    maturity: u64, 
+    strike: u64,
+    max_makers: u16,
+    max_takers: u16,
+    lot_size: u64,
+    min_ticker_increment: f32,
+    num_lots_to_sell: u64,
+    premium_limit: u64
 }
