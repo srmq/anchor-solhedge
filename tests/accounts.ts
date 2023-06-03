@@ -7,7 +7,8 @@ export const getVaultFactoryPdaAddress = async (
   program: anchor.Program<AnchorSolhedge>,
   baseAssetMint: anchor.web3.PublicKey,
   quoteAssetMint: anchor.web3.PublicKey,
-  params: MakerCreatePutOptionParams
+  maturity: anchor.BN,
+  strike: anchor.BN
 ) => {
 
   const [putOptionVaultFactoryInfo, _putOptionVaultFactoryInfoBump] = anchor.web3.PublicKey.findProgramAddressSync(
@@ -15,8 +16,8 @@ export const getVaultFactoryPdaAddress = async (
       Buffer.from(anchor.utils.bytes.utf8.encode("PutOptionVaultFactoryInfo")),
       baseAssetMint.toBuffer(),
       quoteAssetMint.toBuffer(),
-      params.maturity.toArrayLike(Buffer, "le", 8),
-      params.strike.toArrayLike(Buffer, "le", 8)
+      maturity.toArrayLike(Buffer, "le", 8),
+      strike.toArrayLike(Buffer, "le", 8)
     ],
     program.programId
   )
@@ -123,6 +124,90 @@ export const getUserMakerInfoAllVaults = async(
 
 }
 
+export const getUserMakerInfoForVault = async(
+  program: anchor.Program<AnchorSolhedge>,
+  vaultAddress: anchor.web3.PublicKey,
+  userAddress: anchor.web3.PublicKey,
+) => {
+
+  const filter = [
+    {
+      memcmp: {
+        offset: 8 + // Discriminator
+                2 + // ord: u16
+                8 + // quote_asset_qty: u64
+                8 + // volume_sold: u64
+                1 + // is_settled: bool
+                8 + // premium_limit: u64
+                32, // owner: Pubkey
+        bytes: vaultAddress.toBase58()
+      },
+    },
+    {
+      memcmp: {
+        offset: 8 + // Discriminator
+                2 + // ord: u16
+                8 + // quote_asset_qty: u64
+                8 + // volume_sold: u64
+                1 + // is_settled: bool
+                8, // premium_limit: u64
+        bytes: userAddress.toBase58()
+      },
+    }
+  ]
+  const res = program.account.putOptionMakerInfo.all(filter)
+
+  return res
+}
+
+export const getSellersInVault = async (
+  program: anchor.Program<AnchorSolhedge>,
+  vaultAddress: anchor.web3.PublicKey,
+  fairPrice: number,
+  slippageTolerance: number
+) => {
+  if (!slippageTolerance || slippageTolerance <= 0.0) {
+    throw new Error(`slippageTolerance has to be correctly defined, cannot be ${slippageTolerance}`)
+  }
+  if (!fairPrice || fairPrice <= 0.0) {
+    throw new Error(`fairPrice should be greater than zero, cannot be ${fairPrice}`)
+  }
+  if (!Number.isSafeInteger(fairPrice)) {
+    throw new Error(`fairPrice should be an integer in price lamports, cannot be ${fairPrice}`)
+  }
+
+  let results = await getAllMakerInfosForVault(program, vaultAddress)
+  results = results.filter(makerInfo => 
+    makerInfo.account.quoteAssetQty.toNumber() > makerInfo.account.volumeSold.toNumber()
+    && makerInfo.account.premiumLimit.toNumber() <= Math.floor((1.0+slippageTolerance)*fairPrice))
+  
+  results.sort((a, b) => (a.account.ord as number) - (b.account.ord as number))
+  return results
+}
+
+export const getAllMakerInfosForVault = async(
+  program: anchor.Program<AnchorSolhedge>,
+  vaultAddress: anchor.web3.PublicKey,
+) => {
+
+  const filter = [
+    {
+      memcmp: {
+        offset: 8 + // Discriminator
+                2 + // ord: u16
+                8 + // quote_asset_qty: u64
+                8 + // volume_sold: u64
+                1 + // is_settled: bool
+                8 + // premium_limit: u64
+                32, // owner: Pubkey
+        bytes: vaultAddress.toBase58()
+      },
+    },
+  ]
+  const res = program.account.putOptionMakerInfo.all(filter)
+  return res
+}
+
 
 export class MakerCreatePutOptionParams {
   maturity: anchor.BN //u64,
@@ -130,7 +215,6 @@ export class MakerCreatePutOptionParams {
   maxMakers: number //u16,
   maxTakers: number //u16,
   lotSize: anchor.BN //u64,
-  minTickerIncrement: number //f32,
   numLotsToSell: anchor.BN //u64,
   premiumLimit: anchor.BN //u64
 
@@ -140,7 +224,6 @@ export class MakerCreatePutOptionParams {
     maxMakers: number //u16,
     maxTakers: number //u16,
     lotSize: anchor.BN //u64,
-    minTickerIncrement: number //f32,
     numLotsToSell: anchor.BN //u64,
     premiumLimit: anchor.BN //u64
   }) {
@@ -149,7 +232,6 @@ export class MakerCreatePutOptionParams {
     this.maxMakers = params.maxMakers
     this.maxTakers = params.maxTakers
     this.lotSize = params.lotSize
-    this.minTickerIncrement = params.minTickerIncrement
     this.numLotsToSell = params.numLotsToSell
     this.premiumLimit = params.premiumLimit
   }

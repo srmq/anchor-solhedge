@@ -2,6 +2,10 @@ import * as anchor from "@coral-xyz/anchor";
 import { Program } from "@coral-xyz/anchor";
 import { AnchorSolhedge } from "../target/types/anchor_solhedge";
 import * as token from "@solana/spl-token"
+import NodeWallet from "@coral-xyz/anchor/dist/cjs/nodewallet";
+import { printAddressLookupTable, sendTransactionV0 } from "./util";
+
+
 import { assert, expect } from "chai";
 import { 
   MakerCreatePutOptionParams, 
@@ -10,12 +14,18 @@ import {
   getUserVaultAssociatedAccountAddress,
   getAllMaybeNotMaturedFactories,
   getVaultsForPutFactory,
-  getUserMakerInfoAllVaults
+  getUserMakerInfoAllVaults,
+  getAllMakerInfosForVault,
+  getUserMakerInfoForVault,
+  getSellersInVault
 } from "./accounts";
 import * as borsh from "borsh";
 
 
 const TEST_PUT_MAKER_KEY = [7,202,200,249,141,19,80,240,20,148,116,158,237,253,235,157,26,157,95,58,241,232,6,221,233,94,248,189,255,95,87,169,170,77,151,133,53,15,237,214,51,0,2,67,60,75,202,138,200,234,155,157,153,141,162,233,83,179,126,125,248,211,212,51]
+const TEST_PUT_MAKER2_KEY = [58,214,126,90,15,29,80,114,170,70,234,58,244,144,25,23,110,1,6,19,176,12,232,59,55,64,56,53,60,187,246,157,140,117,187,255,239,135,134,192,94,254,53,137,53,27,99,244,218,86,207,59,22,189,242,164,155,104,68,250,161,179,108,4]
+
+const TEST_PUT_TAKER_KEY = [198,219,91,244,252,118,0,25,83,232,178,61,51,196,168,151,77,1,142,9,164,80,29,63,76,216,213,85,99,185,71,113,36,61,101,115,203,92,102,70,200,37,98,228,234,240,155,7,144,0,244,71,236,104,22,131,143,216,47,244,151,205,246,245]
 
 // The corresponding pubkey of this key is what we should put in pyutil/replaceMint.py to generate the mocks USDC and WBTC
 const TEST_MOCK_MINTER_KEY = [109,3,86,101,96,42,254,204,98,232,34,172,105,37,112,24,223,194,66,133,2,105,54,228,54,97,90,111,253,35,245,73,93,83,136,36,51,237,111,8,250,149,126,98,135,211,138,191,207,116,66,179,204,231,147,190,217,190,220,93,181,102,164,238]
@@ -112,6 +122,9 @@ describe("anchor-solhedge", () => {
 
   const minterKeypair = keyPairFromSecret(TEST_MOCK_MINTER_KEY)
   const putMakerKeypair = keyPairFromSecret(TEST_PUT_MAKER_KEY)
+  const putMaker2Keypair = keyPairFromSecret(TEST_PUT_MAKER2_KEY)
+
+  const putTakerKeypair = keyPairFromSecret(TEST_PUT_TAKER_KEY)
 
   const usdcToken = new anchor.web3.PublicKey("EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v")
   const wormholeBTCToken = new anchor.web3.PublicKey("3NZ9JMVBmGAqocybic2c7LQCJScmgsAZ6vQqTDzcqmJh")
@@ -140,7 +153,16 @@ describe("anchor-solhedge", () => {
         airdropSolIfNeeded(
           putMakerKeypair,
           anchor.getProvider().connection
+        ),
+        airdropSolIfNeeded(
+          putMaker2Keypair,
+          anchor.getProvider().connection
+        ),
+        airdropSolIfNeeded(
+          putTakerKeypair,
+          anchor.getProvider().connection
         )
+
       ]
       await Promise.all(airdrops)
     } 
@@ -177,17 +199,16 @@ describe("anchor-solhedge", () => {
 
     const vaultParams = new MakerCreatePutOptionParams(
       {
-        maturity: new anchor.BN(tomorrow),
+        maturity: new anchor.BN(tomorrow+300),
         strike: new anchor.BN(lamportPrice),
         lotSize: new anchor.BN(10000),
         maxMakers: 100,
         maxTakers: 100,
-        minTickerIncrement: 0.01,
         numLotsToSell: new anchor.BN(1000),
-        premiumLimit: new anchor.BN(lamportPrice/100)  
+        premiumLimit: new anchor.BN(Math.floor(lamportPrice/100))  
       })
 
-    const putOptionVaultFactoryAddress = await getVaultFactoryPdaAddress(program, wormholeBTCToken, usdcToken, vaultParams)
+    const putOptionVaultFactoryAddress = await getVaultFactoryPdaAddress(program, wormholeBTCToken, usdcToken, vaultParams.maturity, vaultParams.strike)
     
     console.log('Derived address for vault factory is: ' + putOptionVaultFactoryAddress.toString())
     const beforeBalance = await anchor.getProvider().connection.getBalance(putMakerKeypair.publicKey)
@@ -246,6 +267,135 @@ describe("anchor-solhedge", () => {
     assert.equal(vaultsForFactory[0].account.maxTakers, vaultParams.maxTakers)
 
     const userInfoInVault = await getUserMakerInfoAllVaults(program, putMakerKeypair.publicKey)
-    console.log(userInfoInVault)
+    assert.equal(userInfoInVault[0].account.premiumLimit.toNumber(), vaultParams.premiumLimit.toNumber())
+
+    const makerInfos = await getAllMakerInfosForVault(program, vaultsForFactory[0].publicKey)
+    assert.equal(makerInfos[0].account.premiumLimit.toNumber(), vaultParams.premiumLimit.toNumber())
+
+    const makerInfoForVault = await getUserMakerInfoForVault(program, vaultsForFactory[0].publicKey, putMakerKeypair.publicKey)
+    assert.equal(makerInfoForVault[0].account.premiumLimit.toNumber(), vaultParams.premiumLimit.toNumber())
+
+    console.log("Second maker entering the same put option vault")
+    const putMaker2USDCATA = await createTokenAccount(conn, minterKeypair, usdcToken, putMaker2Keypair.publicKey)
+    const usdcMint2Amount = 50000
+    await mintTokens(conn, minterKeypair, usdcToken, putMaker2USDCATA.address, minterKeypair, usdcMint2Amount)
+    console.log('Minted 50k usdc to test put maker 2')
+    const updatedATA2 = await token.getOrCreateAssociatedTokenAccount(conn, minterKeypair, usdcToken, putMaker2Keypair.publicKey)
+    const balance2 = updatedATA2.amount / BigInt(10.0 ** mintInfoUSDC.decimals)
+    expect(balance2).eq(BigInt(usdcMint2Amount))
+    const putOptionVaultFactoryAddress2 = await getVaultFactoryPdaAddress(program, wormholeBTCToken, usdcToken, vaultParams.maturity, vaultParams.strike)
+    const vaultInfo = (await getVaultsForPutFactory(program, putOptionVaultFactoryAddress2))[0]
+    const vaultBaseAssetTreasury2 = await token.getAssociatedTokenAddress(wormholeBTCToken, vaultInfo.publicKey, true)
+    const vaultQuoteAssetTreasury2 = await token.getAssociatedTokenAddress(usdcToken, vaultInfo.publicKey, true)
+
+    let tx3 = await program.methods.makerEnterPutOptionVault(new anchor.BN(500), new anchor.BN(0)).accounts({
+      initializer: putMaker2Keypair.publicKey,
+      vaultFactoryInfo: putOptionVaultFactoryAddress2,
+      vaultInfo: vaultInfo.publicKey,
+      vaultQuoteAssetTreasury: vaultQuoteAssetTreasury2,
+      baseAssetMint: wormholeBTCToken,
+      quoteAssetMint: usdcToken,
+      makerQuoteAssetAccount: updatedATA2.address,
+    }).signers([putMaker2Keypair]).rpc()
+    const makerInfos2 = await getAllMakerInfosForVault(program, vaultInfo.publicKey)
+    // console.log(makerInfos2)
+    assert.equal(makerInfos2.length, 2)
+
+    let maker2InfoForVault = await getUserMakerInfoForVault(program, vaultInfo.publicKey, putMaker2Keypair.publicKey)
+    const qty500Lots = maker2InfoForVault[0].account.quoteAssetQty.toNumber()
+    assert.isTrue(qty500Lots > 0)
+
+    let tx4 = await program.methods.makerAdjustPositionPutOptionVault(new anchor.BN(0), new anchor.BN(0)).accounts({
+      
+      initializer: putMaker2Keypair.publicKey,
+      vaultFactoryInfo: putOptionVaultFactoryAddress2,
+      vaultInfo: vaultInfo.publicKey,
+      vaultQuoteAssetTreasury: vaultQuoteAssetTreasury2,
+      putOptionMakerInfo: maker2InfoForVault[0].publicKey,
+      baseAssetMint: wormholeBTCToken,
+      quoteAssetMint: usdcToken,
+      makerQuoteAssetAccount: updatedATA2.address,
+    }).signers([putMaker2Keypair]).rpc()
+    maker2InfoForVault = await getUserMakerInfoForVault(program, vaultInfo.publicKey, putMaker2Keypair.publicKey)
+    assert.equal(maker2InfoForVault[0].account.quoteAssetQty.toNumber(), 0)
+
+    let tx5 = await program.methods.makerAdjustPositionPutOptionVault(new anchor.BN(500), new anchor.BN(0)).accounts({
+      
+      initializer: putMaker2Keypair.publicKey,
+      vaultFactoryInfo: putOptionVaultFactoryAddress2,
+      vaultInfo: vaultInfo.publicKey,
+      vaultQuoteAssetTreasury: vaultQuoteAssetTreasury2,
+      putOptionMakerInfo: maker2InfoForVault[0].publicKey,
+      baseAssetMint: wormholeBTCToken,
+      quoteAssetMint: usdcToken,
+      makerQuoteAssetAccount: updatedATA2.address,
+    }).signers([putMaker2Keypair]).rpc()
+    maker2InfoForVault = await getUserMakerInfoForVault(program, vaultInfo.publicKey, putMaker2Keypair.publicKey)
+    assert.equal(maker2InfoForVault[0].account.quoteAssetQty.toNumber(), qty500Lots)
+
+    let fairPrice = Math.floor(lamportPrice/100)
+    const slippageTolerance = 0.05
+
+    fairPrice -= 1
+    let sellers = await getSellersInVault(program, vaultInfo.publicKey, fairPrice, slippageTolerance)
+    // fairPrice below premium limit of 1st maker
+    assert.equal(sellers.length, 1)
+
+    fairPrice += 1
+    sellers = await getSellersInVault(program, vaultInfo.publicKey, fairPrice, slippageTolerance)
+    // now fairPrice is in the range of both sellers
+    assert.equal(sellers.length, 2)
+
+    //Starting taker simulation
+    const connection = new anchor.web3.Connection(anchor.getProvider().connection.rpcEndpoint, {commitment: 'confirmed'})
+    const currentSlot = await connection.getSlot();
+    console.log('currentSlot:', currentSlot);    
+
+    const slots = await connection.getBlocks(Math.max(currentSlot - 200, 0));
+    //console.log(slots)
+
+    //Inspired by https://github.com/solana-developers/web3-examples/tree/main/address-lookup-tables
+    //See also:     https://www.youtube.com/watch?v=8k68cMeLX2U
+    const [lookupTableInst, lookupTableAddress] = anchor.web3.AddressLookupTableProgram.createLookupTable({
+      authority: putTakerKeypair.publicKey,
+      payer: putTakerKeypair.publicKey,
+      recentSlot: slots[0]
+    })
+    const txId = await sendTransactionV0(connection, [lookupTableInst], putTakerKeypair)
+    console.log('Waiting for Address Lookup Table creation confirmation')
+    await confirm(txId);    
+    const sellerAddresses = sellers.map(a => a.publicKey)
+    const ix = anchor.web3.AddressLookupTableProgram.extendLookupTable({
+			addresses: sellerAddresses,
+			authority: putTakerKeypair.publicKey,
+			lookupTable: lookupTableAddress,
+			payer: putTakerKeypair.publicKey,
+		});
+    const tx2Id = await sendTransactionV0(connection, [ix], putTakerKeypair)
+    console.log('Waiting for Address Lookup Table extension confirmation')
+    await confirm(tx2Id);
+
+    async function confirm(tx: string) {
+      const { blockhash, lastValidBlockHeight } = await connection.getLatestBlockhash();
+      await connection.confirmTransaction({
+        blockhash,
+        lastValidBlockHeight,
+        signature: tx
+      }, 'singleGossip');
+    }
+
+    const lookupTableAccount = await connection
+		.getAddressLookupTable(lookupTableAddress)
+		.then((res) => res.value);
+    assert.equal(lookupTableAccount.state.addresses.length, 2)
+
+    anchor.web3.AddressLookupTableProgram.closeLookupTable({
+      lookupTable: lookupTableAddress,
+      authority: putTakerKeypair.publicKey,
+      recipient: putTakerKeypair.publicKey,
+    })
+    
+
   });
+
 });
