@@ -584,6 +584,8 @@ pub struct PutOptionMakerInfo {
 }
 
 pub struct PutOptionTakerInfo {
+    is_initialized: bool,
+    
     ord: u16,
     max_base_asset: u64,
     qty_deposited: u64,
