@@ -15,10 +15,10 @@
     You should have received a copy of the GNU Affero General Public License
     along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
-use anchor_lang::{prelude::*, solana_program};
+use anchor_lang::{prelude::*, solana_program, system_program};
 use anchor_spl::token::{self, Mint, Token, TokenAccount};
 use anchor_spl::associated_token::AssociatedToken;
-use solana_program::sysvar::clock::Clock;
+use solana_program::{pubkey, pubkey::Pubkey, sysvar::clock::Clock};
 
 declare_id!("8DYMPBKLDULX6G7ZuNrs1FcjuMqJwefu2MEfxkCq4sWY");
 
@@ -28,9 +28,13 @@ declare_id!("8DYMPBKLDULX6G7ZuNrs1FcjuMqJwefu2MEfxkCq4sWY");
 //Options will be negotiated up to 30 minutes to maturity
 const FREEZE_SECONDS: u64 = 30*60;
 
+const LAMPORTS_FOR_UPDATE_FAIRPRICE_TICKET: u64 = 500000;
+
 //At this moment we will create options for at most
 //30 days in the future
 const MAX_MATURITY_FUTURE_SECONDS: u64 = 30*24*60*60;
+
+const ORACLE_ADDRESS: Pubkey = pubkey!("9SBVhfXD73uNe9hQRLBBmzgY7PZUTQYGaa6aPM7Gqo68");
 
 #[program]
 pub mod anchor_solhedge {
@@ -38,6 +42,52 @@ pub mod anchor_solhedge {
     use anchor_spl::token::Transfer;
 
     pub fn initialize(_ctx: Context<Initialize>) -> Result<()> {
+        Ok(())
+    }
+
+    pub fn oracle_update_price(
+        ctx: Context<OracleUpdateFairPrice>,
+        new_fair_price: u64
+    ) -> Result<()> {
+        require!(
+            new_fair_price > 0,
+            PutOptionError::PriceZero
+        );
+
+
+        let current_time = Clock::get().unwrap().unix_timestamp as u64;
+        if ctx.accounts.vault_factory_info.maturity > current_time.checked_add(FREEZE_SECONDS).unwrap() {
+            ctx.accounts.vault_factory_info.last_fair_price = new_fair_price;
+            ctx.accounts.vault_factory_info.ts_last_fair_price = current_time;
+        }
+        ctx.accounts.update_ticket.is_used = true;
+        Ok(())
+    }
+
+    pub fn gen_update_put_option_fair_price_ticket(ctx: Context<GenUpdatePutOptionFairPriceTicket>) -> Result<()> {
+        require!(
+            ctx.accounts.put_option_fair_price_ticket.is_used == false,
+            PutOptionError::UsedUpdateTicket
+        );
+
+        let current_time = Clock::get().unwrap().unix_timestamp as u64;
+        require!(
+            ctx.accounts.vault_factory_info.maturity > current_time.checked_add(FREEZE_SECONDS).unwrap(),
+            PutOptionError::MaturityTooEarly
+        );
+
+
+        msg!("Started transferring lamports to oracle");
+        let oracle_fee_transfer_cpi_context = CpiContext::new(
+            ctx.accounts.system_program.to_account_info(),
+            system_program::Transfer {
+                from: ctx.accounts.initializer.to_account_info(),
+                to: ctx.accounts.oracle_wallet.to_account_info()
+            }
+        );
+        system_program::transfer(oracle_fee_transfer_cpi_context, LAMPORTS_FOR_UPDATE_FAIRPRICE_TICKET)?;
+        msg!("Finished transferring lamports to oracle");
+
         Ok(())
     }
 
@@ -79,6 +129,9 @@ pub mod anchor_solhedge {
 
         Ok(result)
     }
+
+    //remember, oracle should have written last fair price at most x minutes before
+    //pub fn taker_buy_lots_put_option_vault()
 
     pub fn maker_adjust_position_put_option_vault(ctx: Context<MakerAdjustPositionPutOptionVault>,     
         num_lots_to_sell: u64,
@@ -273,6 +326,77 @@ pub mod anchor_solhedge {
 
 #[derive(Accounts)]
 pub struct Initialize {}
+
+#[derive(Accounts)]
+#[instruction(
+    new_fair_price: u64
+)]
+
+pub struct OracleUpdateFairPrice<'info> {
+    #[account(
+        mut,
+        constraint = vault_factory_info.strike > 0,
+        constraint = vault_factory_info.is_initialized == true,
+    )]
+    pub vault_factory_info: Account<'info, PutOptionVaultFactoryInfo>,
+
+    #[account(
+        mut,
+        seeds=["PutOptionUpdateTicketInfo".as_bytes().as_ref(), vault_factory_info.key().as_ref(), ticket_owner.key().as_ref()],
+        bump,
+        close = ticket_owner,
+        constraint = update_ticket.is_used == false, 
+    )]
+    pub update_ticket: Account<'info, PutOptionUpdateFairPriceTicketInfo>,
+
+    #[account(
+        mut
+    )]
+    pub ticket_owner: SystemAccount<'info>,
+
+    // Check if initializer is signer, should also be the oracle, mut is required to reduce lamports (fees)
+    #[account(
+        mut,
+        constraint = initializer.key() == ORACLE_ADDRESS
+    )]
+    pub initializer: Signer<'info>,
+
+    // System Program requred for deduction of lamports (fees)
+    pub system_program: Program<'info, System>
+
+}
+
+#[derive(Accounts)]
+pub struct GenUpdatePutOptionFairPriceTicket<'info> {
+    #[account(
+        constraint = vault_factory_info.strike > 0,
+        constraint = vault_factory_info.matured == false,
+        constraint = vault_factory_info.is_initialized == true,
+    )]
+    pub vault_factory_info: Account<'info, PutOptionVaultFactoryInfo>,
+
+    #[account(
+        init,
+        seeds=["PutOptionUpdateTicketInfo".as_bytes().as_ref(), vault_factory_info.key().as_ref(), initializer.key().as_ref()],
+        bump,
+        payer = initializer,
+        space = std::mem::size_of::<PutOptionUpdateFairPriceTicketInfo>() + 8,
+    )]
+    pub put_option_fair_price_ticket: Account<'info, PutOptionUpdateFairPriceTicketInfo>,
+
+    // Check if initializer is signer, mut is required to reduce lamports (fees)
+    #[account(mut)]
+    pub initializer: Signer<'info>,
+
+    #[account(
+        mut,
+        constraint = oracle_wallet.key() == ORACLE_ADDRESS
+    )]
+    pub oracle_wallet: SystemAccount<'info>,
+
+    // System Program requred for deduction of lamports (fees)
+    pub system_program: Program<'info, System>
+}
 
 #[derive(Accounts)]
 #[instruction(
@@ -550,7 +674,11 @@ pub struct PutOptionVaultFactoryInfo {
     matured: bool,
     strike: u64,
     base_asset: Pubkey,
-    quote_asset: Pubkey
+    quote_asset: Pubkey,
+
+    last_fair_price: u64,
+    ts_last_fair_price: u64,
+    settled_price: u64
 }
 
 #[account]
@@ -583,9 +711,16 @@ pub struct PutOptionMakerInfo {
     put_option_vault: Pubkey
 }
 
+#[account]
+pub struct PutOptionUpdateFairPriceTicketInfo {
+    is_used: bool,
+    factory_vault: Pubkey
+}
+
+#[account]
 pub struct PutOptionTakerInfo {
     is_initialized: bool,
-    
+
     ord: u16,
     max_base_asset: u64,
     qty_deposited: u64,
@@ -622,6 +757,10 @@ pub enum PutOptionError {
     #[msg("strike cannot be zero")]
     StrikeZero,
 
+    #[msg("Price cannot be zero")]
+    PriceZero,
+
+
     #[msg("maturity is too early")]
     MaturityTooEarly,
 
@@ -637,5 +776,8 @@ pub enum PutOptionError {
 
     #[msg("Illegal internal state")]
     IllegalState,
+
+    #[msg("Update put option fair price ticket is already used")]
+    UsedUpdateTicket
 
 }    

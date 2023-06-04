@@ -17,9 +17,11 @@ import {
   getUserMakerInfoAllVaults,
   getAllMakerInfosForVault,
   getUserMakerInfoForVault,
-  getSellersInVault
+  getSellersInVault,
+  getUserTicketAccountAddressForVaultFactory
 } from "./accounts";
 import * as borsh from "borsh";
+import { getOraclePubKey, _testInitializeOracleAccount, updatePutOptionFairPrice } from "./oracle";
 
 
 const TEST_PUT_MAKER_KEY = [7,202,200,249,141,19,80,240,20,148,116,158,237,253,235,157,26,157,95,58,241,232,6,221,233,94,248,189,255,95,87,169,170,77,151,133,53,15,237,214,51,0,2,67,60,75,202,138,200,234,155,157,153,141,162,233,83,179,126,125,248,211,212,51]
@@ -168,6 +170,8 @@ describe("anchor-solhedge", () => {
     } 
   );
 
+  _testInitializeOracleAccount(anchor.getProvider().connection)  
+
   it("Is initialized!", async () => {
 
     // Add your test here.
@@ -201,6 +205,7 @@ describe("anchor-solhedge", () => {
       {
         maturity: new anchor.BN(tomorrow+300),
         strike: new anchor.BN(lamportPrice),
+        //lotSize is in base asset lamports
         lotSize: new anchor.BN(10000),
         maxMakers: 100,
         maxTakers: 100,
@@ -356,6 +361,7 @@ describe("anchor-solhedge", () => {
 
     //Inspired by https://github.com/solana-developers/web3-examples/tree/main/address-lookup-tables
     //See also:     https://www.youtube.com/watch?v=8k68cMeLX2U
+    /*
     const [lookupTableInst, lookupTableAddress] = anchor.web3.AddressLookupTableProgram.createLookupTable({
       authority: putTakerKeypair.publicKey,
       payer: putTakerKeypair.publicKey,
@@ -394,7 +400,31 @@ describe("anchor-solhedge", () => {
       authority: putTakerKeypair.publicKey,
       recipient: putTakerKeypair.publicKey,
     })
+    */
     
+    const oracleAddress = getOraclePubKey()
+
+    const ticketAddress = await getUserTicketAccountAddressForVaultFactory(program, putOptionVaultFactoryAddress2, putTakerKeypair.publicKey)
+
+    console.log("Put taker before paying oracle SOL balance is", await anchor.getProvider().connection.getBalance(putTakerKeypair.publicKey)/ anchor.web3.LAMPORTS_PER_SOL)
+    console.log("Oracle SOL balance is", await anchor.getProvider().connection.getBalance(oracleAddress)/ anchor.web3.LAMPORTS_PER_SOL)
+
+
+    let tx6 = await program.methods.genUpdatePutOptionFairPriceTicket().accounts({
+      vaultFactoryInfo: putOptionVaultFactoryAddress2,
+      initializer: putTakerKeypair.publicKey,
+      oracleWallet: oracleAddress,
+      putOptionFairPriceTicket: ticketAddress
+    }).signers([putTakerKeypair]).rpc()
+
+    console.log("Put taker after paying oracle SOL balance is", await anchor.getProvider().connection.getBalance(putTakerKeypair.publicKey)/ anchor.web3.LAMPORTS_PER_SOL)    
+    console.log("Oracle SOL balance is", await anchor.getProvider().connection.getBalance(oracleAddress)/ anchor.web3.LAMPORTS_PER_SOL)
+
+    let tx7 = await updatePutOptionFairPrice(program, putOptionVaultFactoryAddress2, putTakerKeypair.publicKey)
+    console.log("Oracle SOL balance after updating fair price is", await anchor.getProvider().connection.getBalance(oracleAddress)/ anchor.web3.LAMPORTS_PER_SOL)
+    console.log("Put taker after oracle using ticket SOL balance is", await anchor.getProvider().connection.getBalance(putTakerKeypair.publicKey)/ anchor.web3.LAMPORTS_PER_SOL)        
+    let updatedVaultFactory = await program.account.putOptionVaultFactoryInfo.fetch(putOptionVaultFactoryAddress2)
+    console.log(updatedVaultFactory.lastFairPrice.toNumber())
 
   });
 
