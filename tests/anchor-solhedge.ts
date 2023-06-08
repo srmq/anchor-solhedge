@@ -23,7 +23,6 @@ import {
 import * as borsh from "borsh";
 import { getOraclePubKey, _testInitializeOracleAccount, updatePutOptionFairPrice } from "./oracle";
 
-
 const TEST_PUT_MAKER_KEY = [7,202,200,249,141,19,80,240,20,148,116,158,237,253,235,157,26,157,95,58,241,232,6,221,233,94,248,189,255,95,87,169,170,77,151,133,53,15,237,214,51,0,2,67,60,75,202,138,200,234,155,157,153,141,162,233,83,179,126,125,248,211,212,51]
 const TEST_PUT_MAKER2_KEY = [58,214,126,90,15,29,80,114,170,70,234,58,244,144,25,23,110,1,6,19,176,12,232,59,55,64,56,53,60,187,246,157,140,117,187,255,239,135,134,192,94,254,53,137,53,27,99,244,218,86,207,59,22,189,242,164,155,104,68,250,161,179,108,4]
 
@@ -187,16 +186,17 @@ describe("anchor-solhedge", () => {
     await mintTokens(conn, minterKeypair, usdcToken, putMakerUSDCATA.address, minterKeypair, usdcMintAmount)
     console.log('Minted 100k usdc to test put maker')
     const mintInfoUSDC = await token.getMint(conn, usdcToken)
+    console.log(`USDC has ${mintInfoUSDC.decimals} decimals`)
     const updatedATA = await token.getOrCreateAssociatedTokenAccount(conn, minterKeypair, usdcToken, putMakerKeypair.publicKey)
     const balance = updatedATA.amount / BigInt(10.0 ** mintInfoUSDC.decimals)
     expect(balance).eq(BigInt(usdcMintAmount))
     const mintInfoWBTC = await token.getMint(conn, wormholeBTCToken)
+    console.log(`WBTC has ${mintInfoWBTC.decimals} decimals`)
 
     let currEpoch = Math.floor(Date.now()/1000)
     let tomorrow = currEpoch + (24*60*60)
 
-    let strikeInDollars = 29000
-    console.log(`USDC decimals: ${mintInfoUSDC.decimals}, WBTC decimals: ${mintInfoWBTC.decimals}`)
+    let strikeInDollars = 24000
 
     let lamportPrice = strikeInDollars * (10 ** (mintInfoUSDC.decimals - mintInfoWBTC.decimals))
     console.log(`Lamport price for ${strikeInDollars} is ${lamportPrice}`)
