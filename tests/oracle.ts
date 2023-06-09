@@ -6,12 +6,18 @@ import { cdfStdNormal, convertInterest, volatilitySquared } from "./stats";
 import * as token from "@solana/spl-token"
 import * as dotenv from "dotenv";
 
+dotenv.config()
+
 const ORACLE_KEY = [173, 200, 109, 11, 190, 65, 138, 51, 173, 27, 103, 62, 80, 143, 80, 89, 208, 134, 120, 55, 24, 150, 182, 249, 188, 107, 24, 73, 82, 133, 13, 249, 125, 80, 225, 215, 197, 38, 132, 128, 90, 96, 137, 231, 45, 60, 249, 165, 142, 68, 15, 175, 252, 121, 192, 200, 171, 55, 5, 47, 191, 201, 205, 209]
 const HELLO_MOON_BEARER = process.env.HELLO_MOON_BEARER;
 const ANCHOR_FREEZE_SECONDS = 30 * 60;
 const STEP_SAMPLE_SIZE = 30;
-const CURRENT_PRICE_MAX_DELAY_SECONDS = 5*60
+
+//should decrease this (e.g. to 5*60) when hello moon give more reliable data
+const CURRENT_PRICE_MAX_DELAY_SECONDS = 20*60
 const RISK_FREE_YEARLY_RATE = 0.06;
+//should decrease this (e.g. to 3) when hello moon give more reliable data
+const MAX_STEPS_TO_TOO_OLD = 6;
 
 const axiosDefaultOptions = {
     baseURL: 'https://rest-api.hellomoon.io',
@@ -100,7 +106,7 @@ export const updatePutOptionFairPrice = async (
     candles.sort((a, b) => (a.startTime > b.startTime ? -1 : 1))
 
     //checking if candles are unexpectedly too old
-    if (epochInSeconds - candles[0].startTime > 3*granularityToSeconds(granularity)) {
+    if (epochInSeconds - candles[0].startTime > MAX_STEPS_TO_TOO_OLD*granularityToSeconds(granularity)) {
         throw Error(`Cannot trust datafeed, candle stick data is too old. Please try again later. Last startTime epoch was: ${candles[0].startTime}`)
     }
     //console.log("first 5 candles without duplicates, by decreasing startTime")
@@ -113,13 +119,13 @@ export const updatePutOptionFairPrice = async (
     //console.log('cdf normal test')
     //console.log(cdfNormal(5, 30, 25))
 
-    const newPrice = computePutOptionFairPrice(currentTokenPrice.close, vaultFactoryAccount.strike.toNumber()*(10**mintBaseAsset.decimals), candles, granularity)
+    const newPrice = computePutOptionFairPrice(currentTokenPrice.close, vaultFactoryAccount.strike.toNumber(), candles, granularity)
     //this is the price of 1 base asset considering decimals of quote asset
     //for instance, as USDC has 6 decimals, should divide by 1000000 to have price in dollars 
     const maturityEpoch = vaultFactoryAccount.maturity.toNumber()
     var d = new Date(0)
     d.setUTCSeconds(maturityEpoch)
-    console.log(`The fair price to the right to sell 1 bitcoin for ${vaultFactoryAccount.strike.toNumber()*(10**(mintBaseAsset.decimals - mintQuoteAsset.decimals))} dollars at ${d.toUTCString()} is ${newPrice/(10**mintQuoteAsset.decimals)}`)
+    console.log(`The fair price to the right to sell 1 bitcoin for ${vaultFactoryAccount.strike.toNumber()/(10**(mintQuoteAsset.decimals))} dollars at ${d.toUTCString()} is ${newPrice/(10**mintQuoteAsset.decimals)}`)
     const oracleKeyPair = anchor.web3.Keypair.fromSecretKey(Uint8Array.from(ORACLE_KEY))
     let tx = program.methods.oracleUpdatePrice(new anchor.BN(newPrice)).accounts({
         vaultFactoryInfo: vaultFactoryInfo,

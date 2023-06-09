@@ -194,19 +194,19 @@ describe("anchor-solhedge", () => {
     console.log(`WBTC has ${mintInfoWBTC.decimals} decimals`)
 
     let currEpoch = Math.floor(Date.now()/1000)
-    let tomorrow = currEpoch + (24*60*60)
+    let oneWeek = currEpoch + (7*24*60*60)
 
-    let strikeInDollars = 24000
+    let strikeInDollars = 25000
 
-    let lamportPrice = strikeInDollars * (10 ** (mintInfoUSDC.decimals - mintInfoWBTC.decimals))
+    let lamportPrice = strikeInDollars * (10 ** mintInfoUSDC.decimals)
     console.log(`Lamport price for ${strikeInDollars} is ${lamportPrice}`)
 
     const vaultParams = new MakerCreatePutOptionParams(
       {
-        maturity: new anchor.BN(tomorrow+300),
+        maturity: new anchor.BN(oneWeek+300),
         strike: new anchor.BN(lamportPrice),
-        //lotSize is in base asset lamports
-        lotSize: new anchor.BN(10000),
+        //lotSize is in 10^lot_size
+        lotSize: -3,
         maxMakers: 100,
         maxTakers: 100,
         numLotsToSell: new anchor.BN(1000),
@@ -244,7 +244,8 @@ describe("anchor-solhedge", () => {
     } = await getVaultDerivedPdaAddresses(program, putOptionVaultFactoryAddress, wormholeBTCToken, usdcToken, vaultNumber)
 
     const userAVA = getUserVaultAssociatedAccountAddress(program, putOptionVaultFactoryAddress, vaultNumber, putMakerKeypair.publicKey)
-    let tx2 = await program.methods.makerCreatePutOptionVault(vaultParams, vaultNumber).accounts({
+
+    var tx2 = await program.methods.makerCreatePutOptionVault(vaultParams, vaultNumber).accounts({
       initializer: putMakerKeypair.publicKey,
       vaultFactoryInfo: putOptionVaultFactoryAddress,
       vaultInfo: putOptionVaultAddress,
@@ -254,6 +255,7 @@ describe("anchor-solhedge", () => {
       quoteAssetMint: usdcToken,
       makerQuoteAssetAccount: updatedATA.address,
     }).signers([putMakerKeypair]).rpc()
+
     console.log("Transaction Signature -> ", tx2)
     const afterBalance = await anchor.getProvider().connection.getBalance(putMakerKeypair.publicKey)
     console.log("Final putmaker SOL balance is", afterBalance / anchor.web3.LAMPORTS_PER_SOL)
@@ -341,12 +343,12 @@ describe("anchor-solhedge", () => {
     let fairPrice = Math.floor(lamportPrice/100)
     const slippageTolerance = 0.05
 
-    fairPrice -= 1
+    fairPrice -= 100000000
     let sellers = await getSellersInVault(program, vaultInfo.publicKey, fairPrice, slippageTolerance)
     // fairPrice below premium limit of 1st maker
     assert.equal(sellers.length, 1)
 
-    fairPrice += 1
+    fairPrice += 100000000
     sellers = await getSellersInVault(program, vaultInfo.publicKey, fairPrice, slippageTolerance)
     // now fairPrice is in the range of both sellers
     assert.equal(sellers.length, 2)
@@ -425,7 +427,9 @@ describe("anchor-solhedge", () => {
     console.log("Put taker after oracle using ticket SOL balance is", await anchor.getProvider().connection.getBalance(putTakerKeypair.publicKey)/ anchor.web3.LAMPORTS_PER_SOL)        
     let updatedVaultFactory = await program.account.putOptionVaultFactoryInfo.fetch(putOptionVaultFactoryAddress2)
     console.log(updatedVaultFactory.lastFairPrice.toNumber())
-
+    sellers = await getSellersInVault(program, vaultInfo.publicKey, updatedVaultFactory.lastFairPrice.toNumber(), slippageTolerance)
+    console.log('sellers in vault')
+    console.log(sellers)
   });
 
 });

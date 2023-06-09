@@ -182,6 +182,7 @@ export const getSellersInVault = async (
   fairPrice: number,
   slippageTolerance: number
 ) => {
+  console.log(`fairPrice in getSellersInVault is ${fairPrice}`)
   if (!slippageTolerance || slippageTolerance <= 0.0) {
     throw new Error(`slippageTolerance has to be correctly defined, cannot be ${slippageTolerance}`)
   }
@@ -230,7 +231,7 @@ export class MakerCreatePutOptionParams {
   strike: anchor.BN //u64,
   maxMakers: number //u16,
   maxTakers: number //u16,
-  lotSize: anchor.BN //u64,
+  lotSize: number //i8,
   numLotsToSell: anchor.BN //u64,
   premiumLimit: anchor.BN //u64
 
@@ -239,7 +240,7 @@ export class MakerCreatePutOptionParams {
     strike: anchor.BN //u64,
     maxMakers: number //u16,
     maxTakers: number //u16,
-    lotSize: anchor.BN //u64,
+    lotSize: number //i8,
     numLotsToSell: anchor.BN //u64,
     premiumLimit: anchor.BN //u64
   }) {

@@ -150,8 +150,19 @@ pub mod anchor_solhedge {
             PutOptionError::IllegalState
         );
 
+        let lot_multiplier:f64 = 10.0f64.powf(ctx.accounts.vault_info.lot_size as f64);
 
-        let wanted_amount = ctx.accounts.vault_info.lot_size.checked_mul(num_lots_to_sell).unwrap().checked_mul(ctx.accounts.vault_factory_info.strike).unwrap();
+        let wanted_amount_f64 = (num_lots_to_sell as f64)*lot_multiplier*(ctx.accounts.vault_factory_info.strike as f64);
+        require!(
+            wanted_amount_f64.is_finite(),
+            PutOptionError::Overflow
+        );
+        require!(
+            wanted_amount_f64 >= 0.0,
+            PutOptionError::IllegalState
+        );
+        
+        let wanted_amount = wanted_amount_f64.ceil() as u64;
 
         if wanted_amount > ctx.accounts.put_option_maker_info.quote_asset_qty {
             // Maker wants to increase her position in the vault
@@ -244,7 +255,30 @@ pub mod anchor_solhedge {
             authority: ctx.accounts.initializer.to_account_info(),
         };
         let token_transfer_context = CpiContext::new(cpi_program, cpi_accounts);
-        let transfer_amount = ctx.accounts.vault_info.lot_size.checked_mul(num_lots_to_sell).unwrap().checked_mul(ctx.accounts.vault_factory_info.strike).unwrap();
+
+        let lot_multiplier:f64 = 10.0f64.powf(ctx.accounts.vault_info.lot_size as f64);
+        msg!("num_lots_to_sell: {}", num_lots_to_sell);
+        msg!("lot_multiplier: {}", lot_multiplier);
+        msg!("strike: {}", ctx.accounts.vault_factory_info.strike);
+
+        let transfer_amount_f64 = (num_lots_to_sell as f64)*lot_multiplier*(ctx.accounts.vault_factory_info.strike as f64);
+        require!(
+            transfer_amount_f64.is_finite(),
+            PutOptionError::Overflow
+        );
+        require!(
+            transfer_amount_f64 >= 0.0,
+            PutOptionError::IllegalState
+        );
+        
+        let transfer_amount = transfer_amount_f64.ceil() as u64;
+
+        require!(
+            ctx.accounts.maker_quote_asset_account.amount >= transfer_amount,
+            PutOptionError::InsufficientFunds
+        );
+
+
         token::transfer(token_transfer_context, transfer_amount)?;
         msg!("Transferred {} USDC lamports to quote asset treasury", transfer_amount);
 
@@ -295,7 +329,32 @@ pub mod anchor_solhedge {
             authority: ctx.accounts.initializer.to_account_info(),
         };
         let token_transfer_context = CpiContext::new(cpi_program, cpi_accounts);
-        let transfer_amount = params.lot_size.checked_mul(params.num_lots_to_sell).unwrap().checked_mul(params.strike).unwrap();
+
+        let lot_multiplier:f64 = 10.0f64.powf(params.lot_size as f64);
+
+        let transfer_amount_f64 = (params.num_lots_to_sell as f64)*lot_multiplier*(params.strike as f64);
+        msg!("params.lot_size: {}", params.lot_size);
+        msg!("num_lots_to_sell: {}", params.num_lots_to_sell);
+        msg!("lot_multiplier: {}", lot_multiplier);
+        msg!("strike: {}", params.strike);
+
+        msg!("Transfer amount is {}", transfer_amount_f64);
+        require!(
+            transfer_amount_f64.is_finite(),
+            PutOptionError::Overflow
+        );
+        require!(
+            transfer_amount_f64 >= 0.0,
+            PutOptionError::IllegalState
+        );
+        
+        let transfer_amount = transfer_amount_f64.ceil() as u64;
+
+        require!(
+            ctx.accounts.maker_quote_asset_account.amount >= transfer_amount,
+            PutOptionError::InsufficientFunds
+        );
+
         token::transfer(token_transfer_context, transfer_amount)?;
         msg!("Transferred {} USDC lamports to quote asset treasury", transfer_amount);
 
@@ -560,8 +619,7 @@ pub struct MakerEnterPutOptionVault<'info> {
     #[account(
         mut,
         constraint = maker_quote_asset_account.owner.key() == initializer.key(),
-        constraint = maker_quote_asset_account.mint == quote_asset_mint.key(),
-        constraint = vault_info.lot_size.checked_mul(num_lots_to_sell).unwrap().checked_mul(vault_factory_info.strike).unwrap() <= maker_quote_asset_account.amount
+        constraint = maker_quote_asset_account.mint == quote_asset_mint.key()
     )]
     pub maker_quote_asset_account: Box<Account<'info, TokenAccount>>,
 
@@ -649,8 +707,7 @@ pub struct MakerCreatePutOptionVault<'info> {
     #[account(
         mut,
         constraint = maker_quote_asset_account.owner.key() == initializer.key(),
-        constraint = maker_quote_asset_account.mint == quote_asset_mint.key(),
-        constraint = params.lot_size.checked_mul(params.num_lots_to_sell).unwrap().checked_mul(params.strike).unwrap() <= maker_quote_asset_account.amount
+        constraint = maker_quote_asset_account.mint == quote_asset_mint.key()
     )]
     pub maker_quote_asset_account: Box<Account<'info, TokenAccount>>,
 
@@ -688,7 +745,7 @@ pub struct PutOptionVaultInfo {
     ord: u64,
     max_makers: u16,
     max_takers: u16,
-    lot_size: u64,
+    lot_size: i8, //10^lot_size, for instance 0 means 1; -1 means 0.1; 2 means 100
 
     makers_num: u16,
     makers_total_pending_sell: u64,
@@ -735,7 +792,7 @@ pub struct MakerCreatePutOptionParams {
     strike: u64,
     max_makers: u16,
     max_takers: u16,
-    lot_size: u64,
+    lot_size: i8, //10^lot_size, for instance 0 means 1; -1 means 0.1; 2 means 100
     num_lots_to_sell: u64,
     premium_limit: u64
 }
@@ -748,9 +805,6 @@ pub enum PutOptionError {
     #[msg("Number of max_takers cannot be zero")]
     MaxTakersZero,
 
-    #[msg("lot_size cannot be zero")]
-    LotSizeZero,
-
     #[msg("num_lots_to_sell cannot be zero")]
     LotsToSellZero,
 
@@ -759,7 +813,6 @@ pub enum PutOptionError {
 
     #[msg("Price cannot be zero")]
     PriceZero,
-
 
     #[msg("maturity is too early")]
     MaturityTooEarly,
@@ -770,7 +823,6 @@ pub enum PutOptionError {
     #[msg("Unable to decrease position given previous commitments")]
     OversizedDecrease,
 
-
     #[msg("Overflow error")]
     Overflow,
 
@@ -778,6 +830,9 @@ pub enum PutOptionError {
     IllegalState,
 
     #[msg("Update put option fair price ticket is already used")]
-    UsedUpdateTicket
+    UsedUpdateTicket,
+
+    #[msg("Not enought funds in source account")]
+    InsufficientFunds
 
 }    
