@@ -15,10 +15,13 @@
     You should have received a copy of the GNU Affero General Public License
     along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
+pub mod writer;
 use anchor_lang::{prelude::*, solana_program, system_program};
 use anchor_spl::token::{self, Mint, Token, TokenAccount};
 use anchor_spl::associated_token::AssociatedToken;
 use solana_program::{pubkey, pubkey::Pubkey, sysvar::clock::Clock};
+pub use writer::BpfWriter;
+
 
 declare_id!("8DYMPBKLDULX6G7ZuNrs1FcjuMqJwefu2MEfxkCq4sWY");
 
@@ -29,6 +32,8 @@ declare_id!("8DYMPBKLDULX6G7ZuNrs1FcjuMqJwefu2MEfxkCq4sWY");
 const FREEZE_SECONDS: u64 = 30*60;
 
 const LAMPORTS_FOR_UPDATE_FAIRPRICE_TICKET: u64 = 500000;
+
+const MAX_SECONDS_FROM_LAST_FAIR_PRICE_UPDATE: u64 = 60;
 
 //At this moment we will create options for at most
 //30 days in the future
@@ -131,7 +136,53 @@ pub mod anchor_solhedge {
     }
 
     //remember, oracle should have written last fair price at most x minutes before
-    //pub fn taker_buy_lots_put_option_vault()
+    pub fn taker_buy_lots_put_option_vault(ctx: Context<TakerBuyLotsPutOptionVault>,
+        max_fair_price: u64,
+        num_lots_to_buy: u64,
+        initial_funding: u64
+    ) -> Result<()> {
+
+        let current_time = Clock::get().unwrap().unix_timestamp as u64;
+        require!(
+            ctx.accounts.vault_factory_info.maturity > current_time.checked_add(FREEZE_SECONDS).unwrap(),
+            PutOptionError::MaturityTooEarly
+        );
+
+        if !ctx.accounts.put_option_taker_info.is_initialized {
+            require!(
+                !ctx.accounts.vault_info.is_takers_full,
+                PutOptionError::TakersFull
+            );
+
+            ctx.accounts.vault_info.takers_num = ctx.accounts.vault_info.takers_num.checked_add(1).unwrap();
+            if ctx.accounts.vault_info.takers_num >= ctx.accounts.vault_info.max_takers {
+                ctx.accounts.vault_info.is_takers_full = true;
+            }
+
+            ctx.accounts.put_option_taker_info.ord = ctx.accounts.vault_info.takers_num;
+            ctx.accounts.put_option_taker_info.max_base_asset = 0;
+            ctx.accounts.put_option_taker_info.qty_deposited = 0;
+            ctx.accounts.put_option_taker_info.is_settled = false;
+            ctx.accounts.put_option_taker_info.owner = ctx.accounts.initializer.key();
+            ctx.accounts.put_option_taker_info.put_option_vault = ctx.accounts.vault_info.key();
+
+            ctx.accounts.put_option_taker_info.is_initialized = true;
+        }
+
+        require!(
+            ctx.accounts.vault_factory_info.ts_last_fair_price <= current_time,
+            PutOptionError::IllegalState
+        );
+
+        let seconds_from_update = current_time.checked_sub(ctx.accounts.vault_factory_info.ts_last_fair_price).unwrap();
+        require!(
+            seconds_from_update <= MAX_SECONDS_FROM_LAST_FAIR_PRICE_UPDATE,
+            PutOptionError::LastFairPriceUpdateTooOld
+        );
+
+
+        Ok(())
+    }
 
     pub fn maker_adjust_position_put_option_vault(ctx: Context<MakerAdjustPositionPutOptionVault>,     
         num_lots_to_sell: u64,
@@ -388,6 +439,83 @@ pub struct Initialize {}
 
 #[derive(Accounts)]
 #[instruction(
+    max_fair_price: u64,
+    num_lots_to_buy: u64,
+    initial_funding: u64
+)]
+pub struct TakerBuyLotsPutOptionVault<'info> {
+    #[account(
+        constraint = vault_factory_info.strike > 0,
+        constraint = vault_factory_info.is_initialized == true,
+        constraint = vault_factory_info.matured == false,
+        constraint = vault_factory_info.base_asset == base_asset_mint.key(),
+        constraint = vault_factory_info.quote_asset == quote_asset_mint.key(),
+
+    )]
+    pub vault_factory_info: Account<'info, PutOptionVaultFactoryInfo>,
+
+    #[account(
+        mut,
+        seeds=[
+            "PutOptionVaultInfo".as_bytes().as_ref(), 
+            vault_factory_info.key().as_ref(),
+            vault_info.ord.to_le_bytes().as_ref()
+        ], bump,
+        constraint = vault_info.factory_vault == vault_factory_info.key(),
+    )]
+    pub vault_info: Account<'info, PutOptionVaultInfo>,
+
+    #[account(
+        init_if_needed,
+        seeds=[
+            "PutOptionTakerInfo".as_bytes().as_ref(),
+            vault_factory_info.key().as_ref(),
+            vault_info.ord.to_le_bytes().as_ref(), 
+            initializer.key().as_ref()
+        ],
+        bump,
+        payer = initializer,
+        space = std::mem::size_of::<PutOptionTakerInfo>() + 8,
+        constraint = !put_option_taker_info.is_settled
+    )]
+    pub put_option_taker_info: Account<'info, PutOptionTakerInfo>,
+
+
+    // mint for the base_asset
+    pub base_asset_mint: Account<'info, Mint>,
+
+    // mint for the quote asset
+    pub quote_asset_mint: Account<'info, Mint>,
+
+    #[account(
+        mut,
+        constraint = vault_base_asset_treasury.mint == base_asset_mint.key(), // Base asset mint
+        constraint = vault_base_asset_treasury.owner.key() == vault_info.key() // Authority set to vault PDA
+    )]
+    pub vault_base_asset_treasury: Box<Account<'info, TokenAccount>>,
+
+    #[account(
+        mut,
+        constraint = taker_quote_asset_account.owner.key() == initializer.key(),
+        constraint = taker_quote_asset_account.mint == base_asset_mint.key()
+    )]
+    pub taker_quote_asset_account: Box<Account<'info, TokenAccount>>,
+
+
+    // Check if initializer is signer, mut is required to reduce lamports (fees)
+    #[account(mut)]
+    pub initializer: Signer<'info>,
+    
+    // System Program requred for deduction of lamports (fees)
+    pub system_program: Program<'info, System>,
+    // Token Program required to call transfer instruction
+    pub token_program: Program<'info, Token>,
+    pub associated_token_program: Program<'info, AssociatedToken>,
+
+}
+
+#[derive(Accounts)]
+#[instruction(
     new_fair_price: u64
 )]
 
@@ -522,8 +650,8 @@ pub struct MakerAdjustPositionPutOptionVault<'info> {
 
     #[account(
         mut,
-        associated_token::mint = quote_asset_mint, // Quote asset mint
-        associated_token::authority = vault_info // Authority set to vault PDA
+        constraint = vault_quote_asset_treasury.mint == quote_asset_mint.key(), // Quote asset mint
+        constraint = vault_quote_asset_treasury.owner == vault_info.key() // Authority set to vault PDA
     )]
     pub vault_quote_asset_treasury: Box<Account<'info, TokenAccount>>,
 
@@ -597,8 +725,8 @@ pub struct MakerEnterPutOptionVault<'info> {
 
     #[account(
         mut,
-        associated_token::mint = quote_asset_mint, // Quote asset mint
-        associated_token::authority = vault_info // Authority set to vault PDA
+        constraint = vault_quote_asset_treasury.mint == quote_asset_mint.key(), // Quote asset mint
+        constraint = vault_quote_asset_treasury.owner.key() == vault_info.key() // Authority set to vault PDA
     )]
     pub vault_quote_asset_treasury: Box<Account<'info, TokenAccount>>,
 
@@ -768,6 +896,20 @@ pub struct PutOptionMakerInfo {
     put_option_vault: Pubkey
 }
 
+
+impl PutOptionMakerInfo {
+    fn from<'info>(info: &AccountInfo<'info>) -> Account<'info, Self> {
+        Account::try_from(info).unwrap()
+    }
+
+    fn serialize(&self, info: AccountInfo) -> Result<()> {
+        let dst: &mut [u8] = &mut info.try_borrow_mut_data().unwrap();
+        let mut writer: BpfWriter<&mut [u8]> = BpfWriter::new(dst);
+        PutOptionMakerInfo::try_serialize(self, &mut writer)
+    }        
+}
+
+
 #[account]
 pub struct PutOptionUpdateFairPriceTicketInfo {
     is_used: bool,
@@ -832,7 +974,13 @@ pub enum PutOptionError {
     #[msg("Update put option fair price ticket is already used")]
     UsedUpdateTicket,
 
-    #[msg("Not enought funds in source account")]
-    InsufficientFunds
+    #[msg("Not enough funds in source account")]
+    InsufficientFunds,
+
+    #[msg("No more takers are allowed in this vault")]
+    TakersFull,
+
+    #[msg("Last fair price update is too old. Please ask the oracle to make a new update")]
+    LastFairPriceUpdateTooOld
 
 }    

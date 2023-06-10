@@ -428,8 +428,10 @@ describe("anchor-solhedge", () => {
     let updatedVaultFactory = await program.account.putOptionVaultFactoryInfo.fetch(putOptionVaultFactoryAddress2)
     console.log(updatedVaultFactory.lastFairPrice.toNumber())
     sellers = await getSellersInVault(program, vaultInfo.publicKey, updatedVaultFactory.lastFairPrice.toNumber(), slippageTolerance)
-    console.log('sellers in vault')
-    console.log(sellers)
+    // console.log('sellers in vault')
+    // console.log(sellers)
+    
+
   });
 
 });
