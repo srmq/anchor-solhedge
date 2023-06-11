@@ -1,7 +1,9 @@
 import * as anchor from "@coral-xyz/anchor";
 import { AnchorSolhedge } from "../target/types/anchor_solhedge";
-import { getAssociatedTokenAddress } from "@solana/spl-token"
+import { getAssociatedTokenAddress, Account } from "@solana/spl-token"
 import { bs58 } from "@coral-xyz/anchor/dist/cjs/utils/bytes";
+import * as token from "@solana/spl-token"
+
 
 export const getVaultFactoryPdaAddress = async (
   program: anchor.Program<AnchorSolhedge>,
@@ -129,6 +131,7 @@ export const getUserMakerInfoAllVaults = async(
                 2 + // ord: u16
                 8 + // quote_asset_qty: u64
                 8 + // volume_sold: u64
+                1 + // is_all_sold: bool,
                 1 + // is_settled: bool
                 8, // premium_limit: u64
         bytes: userAddress.toBase58()
@@ -153,6 +156,7 @@ export const getUserMakerInfoForVault = async(
                 2 + // ord: u16
                 8 + // quote_asset_qty: u64
                 8 + // volume_sold: u64
+                1 + // is_all_sold: bool,
                 1 + // is_settled: bool
                 8 + // premium_limit: u64
                 32, // owner: Pubkey
@@ -165,6 +169,7 @@ export const getUserMakerInfoForVault = async(
                 2 + // ord: u16
                 8 + // quote_asset_qty: u64
                 8 + // volume_sold: u64
+                1 + // is_all_sold: bool,
                 1 + // is_settled: bool
                 8, // premium_limit: u64
         bytes: userAddress.toBase58()
@@ -176,12 +181,32 @@ export const getUserMakerInfoForVault = async(
   return res
 }
 
+export const getMakerATAs = async (
+  program: anchor.Program<AnchorSolhedge>,
+  sellers: PutOptionMakerInfo[],
+  mint: anchor.web3.PublicKey
+) => {
+  let conn = program.provider.connection
+  let result: Array<[PutOptionMakerInfo, Account]> = []
+  for (const seller of sellers) {
+    let sellerATAAddress = token.getAssociatedTokenAddressSync(mint, seller.account.owner, false)
+    //verify if the account exist, we will not pay for its creation if not, just skip seller
+    let sellerATA = await token.getAccount(conn, sellerATAAddress)
+    //console.log('SELLER ATA')
+    //console.log(sellerATA)
+    if(sellerATA != null && "amount" in sellerATA) {
+      result.push([seller, sellerATA])
+    }
+  }
+  return result
+}
+
 export const getSellersInVault = async (
   program: anchor.Program<AnchorSolhedge>,
   vaultAddress: anchor.web3.PublicKey,
   fairPrice: number,
   slippageTolerance: number
-) => {
+): Promise<PutOptionMakerInfo[]> => {
   console.log(`fairPrice in getSellersInVault is ${fairPrice}`)
   if (!slippageTolerance || slippageTolerance <= 0.0) {
     throw new Error(`slippageTolerance has to be correctly defined, cannot be ${slippageTolerance}`)
@@ -193,14 +218,56 @@ export const getSellersInVault = async (
     throw new Error(`fairPrice should be an integer in price lamports, cannot be ${fairPrice}`)
   }
 
-  let results = await getAllMakerInfosForVault(program, vaultAddress)
-  results = results.filter(makerInfo => 
-    makerInfo.account.quoteAssetQty.toNumber() > makerInfo.account.volumeSold.toNumber()
+  let chainResults = await getAllMakerInfosForVault(program, vaultAddress)
+  chainResults = chainResults.filter(makerInfo => 
+    !makerInfo.account.isAllSold
     && makerInfo.account.premiumLimit.toNumber() <= Math.floor((1.0+slippageTolerance)*fairPrice))
   
-  results.sort((a, b) => (a.account.ord as number) - (b.account.ord as number))
-  return results
+  chainResults.sort((a, b) => (a.account.ord as number) - (b.account.ord as number))
+  let result: PutOptionMakerInfo[] = []
+  chainResults.forEach(chainResult => {
+    result.push(new PutOptionMakerInfo(chainResult))
+  });
+  return result
 }
+
+export class PutOptionMakerInfo {
+  publicKey: anchor.web3.PublicKey
+  account: {
+    ord: number
+    quoteAssetQty: anchor.BN
+    volumeSold: anchor.BN
+    isSettled: boolean
+    premiumLimit: anchor.BN
+    owner: anchor.web3.PublicKey
+    putOptionVault: anchor.web3.PublicKey
+  }
+
+  constructor(params: {
+    publicKey: anchor.web3.PublicKey
+    account: {
+      ord: number | anchor.BN
+      quoteAssetQty: anchor.BN
+      volumeSold: anchor.BN
+      isSettled: boolean
+      premiumLimit: anchor.BN
+      owner: anchor.web3.PublicKey
+      putOptionVault: anchor.web3.PublicKey
+    }    
+  }){
+    this.publicKey = params.publicKey
+    this.account = {
+      ord: new anchor.BN(params.account.ord).toNumber(),
+      quoteAssetQty: params.account.quoteAssetQty,
+      volumeSold: params.account.volumeSold,
+      isSettled: params.account.isSettled,
+      premiumLimit: params.account.premiumLimit,
+      owner: params.account.owner,
+      putOptionVault: params.account.putOptionVault
+    }
+  }
+}
+
 
 export const getAllMakerInfosForVault = async(
   program: anchor.Program<AnchorSolhedge>,
@@ -214,6 +281,7 @@ export const getAllMakerInfosForVault = async(
                 2 + // ord: u16
                 8 + // quote_asset_qty: u64
                 8 + // volume_sold: u64
+                1 + // is_all_sold: bool,                
                 1 + // is_settled: bool
                 8 + // premium_limit: u64
                 32, // owner: Pubkey

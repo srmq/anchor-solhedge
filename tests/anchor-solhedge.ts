@@ -18,7 +18,8 @@ import {
   getAllMakerInfosForVault,
   getUserMakerInfoForVault,
   getSellersInVault,
-  getUserTicketAccountAddressForVaultFactory
+  getUserTicketAccountAddressForVaultFactory,
+  getMakerATAs
 } from "./accounts";
 import * as borsh from "borsh";
 import { getOraclePubKey, _testInitializeOracleAccount, updatePutOptionFairPrice } from "./oracle";
@@ -435,8 +436,8 @@ describe("anchor-solhedge", () => {
     let updatedVaultFactory = await program.account.putOptionVaultFactoryInfo.fetch(putOptionVaultFactoryAddress2)
     console.log(updatedVaultFactory.lastFairPrice.toNumber())
     sellers = await getSellersInVault(program, vaultInfo.publicKey, updatedVaultFactory.lastFairPrice.toNumber(), slippageTolerance)
-    // console.log('sellers in vault')
-    // console.log(sellers)
+    //console.log('sellers in vault')
+    //console.log(sellers)
 
     const putTakerUSDCATA = await createTokenAccount(conn, minterKeypair, usdcToken, putTakerKeypair.publicKey)
     
@@ -460,6 +461,13 @@ describe("anchor-solhedge", () => {
     const takerLots = 600
 
     const protocolFeesUSDCATA = await createTokenAccount(conn, minterKeypair, usdcToken, protocolFeesKeypair.publicKey)
+
+    const tokenAccountTestFetch = await token.getAccount(conn, protocolFeesUSDCATA.address)
+    assert.equal(tokenAccountTestFetch.address, protocolFeesUSDCATA.address)
+
+    let sellersAndATAS = await getMakerATAs(program, sellers, usdcToken)
+    console.log("SELLERS AND ATAS")
+    console.log(sellersAndATAS)
 
     let tx8 = await program.methods.takerBuyLotsPutOptionVault(
       new anchor.BN(myMaxPrice), 

@@ -226,6 +226,7 @@ pub mod anchor_solhedge {
         //FIXME CONTINUE
         //Now implement the taking of accounts of makers and their corresponding
         //quote assets ATA to receive option premium when the taker buys from them. 
+        //remember to set is_all_sold in maker when appropriate
 
         // not like below, only what he can effectively buy from users
         // ctx.accounts.put_option_taker_info.max_base_asset = lamports_base_asset_max_amount_f64.round() as u64;
@@ -250,8 +251,10 @@ pub mod anchor_solhedge {
         );
 
         let lot_multiplier:f64 = 10.0f64.powf(ctx.accounts.vault_info.lot_size as f64);
+        let lot_value = lot_multiplier*(ctx.accounts.vault_factory_info.strike as f64);
+        let rounded_lot_value = lot_value.ceil() as u64;
 
-        let wanted_amount_f64 = (num_lots_to_sell as f64)*lot_multiplier*(ctx.accounts.vault_factory_info.strike as f64);
+        let wanted_amount_f64 = (num_lots_to_sell as f64)*lot_value;
         require!(
             wanted_amount_f64.is_finite(),
             PutOptionError::Overflow
@@ -279,6 +282,11 @@ pub mod anchor_solhedge {
             token::transfer(token_transfer_context, increase_amount)?;
             msg!("Transferred {} USDC lamports to quote asset treasury", increase_amount);
             ctx.accounts.put_option_maker_info.quote_asset_qty = ctx.accounts.put_option_maker_info.quote_asset_qty.checked_add(increase_amount).unwrap();
+            require!(
+                ctx.accounts.put_option_maker_info.quote_asset_qty.checked_sub(ctx.accounts.put_option_maker_info.volume_sold).unwrap() >= rounded_lot_value,
+                PutOptionError::IllegalState
+            );
+            ctx.accounts.put_option_maker_info.is_all_sold = false;
             ctx.accounts.vault_info.makers_total_pending_sell = ctx.accounts.vault_info.makers_total_pending_sell.checked_add(increase_amount).unwrap();
             ctx.accounts.vault_info.makers_total_pending_settle = ctx.accounts.vault_info.makers_total_pending_settle.checked_add(increase_amount).unwrap();
 
@@ -314,6 +322,7 @@ pub mod anchor_solhedge {
             token::transfer(token_transfer_context, decrease_amount)?;
             msg!("Transferred {} USDC lamports from quote asset treasury to user", decrease_amount);
             ctx.accounts.put_option_maker_info.quote_asset_qty = ctx.accounts.put_option_maker_info.quote_asset_qty.checked_sub(decrease_amount).unwrap();
+            ctx.accounts.put_option_maker_info.is_all_sold = ctx.accounts.put_option_maker_info.quote_asset_qty.checked_sub(ctx.accounts.put_option_maker_info.volume_sold).unwrap() < rounded_lot_value;
             ctx.accounts.vault_info.makers_total_pending_sell = ctx.accounts.vault_info.makers_total_pending_sell.checked_sub(decrease_amount).unwrap();
             ctx.accounts.vault_info.makers_total_pending_settle = ctx.accounts.vault_info.makers_total_pending_settle.checked_sub(decrease_amount).unwrap();
     
@@ -359,8 +368,10 @@ pub mod anchor_solhedge {
         msg!("num_lots_to_sell: {}", num_lots_to_sell);
         msg!("lot_multiplier: {}", lot_multiplier);
         msg!("strike: {}", ctx.accounts.vault_factory_info.strike);
+        let lot_value = lot_multiplier*(ctx.accounts.vault_factory_info.strike as f64);
+        let rounded_lot_value = lot_value.ceil() as u64;
 
-        let transfer_amount_f64 = (num_lots_to_sell as f64)*lot_multiplier*(ctx.accounts.vault_factory_info.strike as f64);
+        let transfer_amount_f64 = (num_lots_to_sell as f64)*lot_value;
         require!(
             transfer_amount_f64.is_finite(),
             PutOptionError::Overflow
@@ -390,6 +401,11 @@ pub mod anchor_solhedge {
         ctx.accounts.put_option_maker_info.ord = ctx.accounts.vault_info.makers_num;
         ctx.accounts.put_option_maker_info.quote_asset_qty = transfer_amount;
         ctx.accounts.put_option_maker_info.volume_sold = 0;
+        ctx.accounts.put_option_maker_info.is_all_sold = false;
+        require!(
+            ctx.accounts.put_option_maker_info.quote_asset_qty >= rounded_lot_value,
+            PutOptionError::IllegalState
+        );
         ctx.accounts.put_option_maker_info.is_settled = false;
         ctx.accounts.put_option_maker_info.premium_limit = premium_limit;
         ctx.accounts.put_option_maker_info.owner = ctx.accounts.maker_quote_asset_account.owner;
@@ -430,8 +446,11 @@ pub mod anchor_solhedge {
         let token_transfer_context = CpiContext::new(cpi_program, cpi_accounts);
 
         let lot_multiplier:f64 = 10.0f64.powf(params.lot_size as f64);
+        let lot_value = lot_multiplier*(params.strike as f64);
+        let rounded_lot_value = lot_value.ceil() as u64;
 
-        let transfer_amount_f64 = (params.num_lots_to_sell as f64)*lot_multiplier*(params.strike as f64);
+
+        let transfer_amount_f64 = (params.num_lots_to_sell as f64)*lot_value;
         msg!("params.lot_size: {}", params.lot_size);
         msg!("num_lots_to_sell: {}", params.num_lots_to_sell);
         msg!("lot_multiplier: {}", lot_multiplier);
@@ -472,6 +491,11 @@ pub mod anchor_solhedge {
         ctx.accounts.put_option_maker_info.quote_asset_qty = transfer_amount;
         ctx.accounts.put_option_maker_info.volume_sold = 0;
         ctx.accounts.put_option_maker_info.is_settled = false;
+        ctx.accounts.put_option_maker_info.is_all_sold = false;
+        require!(
+            ctx.accounts.put_option_maker_info.quote_asset_qty >= rounded_lot_value,
+            PutOptionError::IllegalState
+        );
         ctx.accounts.put_option_maker_info.premium_limit = params.premium_limit;
         ctx.accounts.put_option_maker_info.owner = ctx.accounts.maker_quote_asset_account.owner;
         ctx.accounts.put_option_maker_info.put_option_vault = ctx.accounts.vault_info.key();
@@ -961,6 +985,7 @@ pub struct PutOptionMakerInfo {
     ord: u16,
     quote_asset_qty: u64,
     volume_sold: u64,
+    is_all_sold: bool,
     is_settled: bool,
     premium_limit: u64,
     owner: Pubkey,
