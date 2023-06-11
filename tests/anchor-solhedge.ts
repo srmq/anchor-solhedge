@@ -11,7 +11,7 @@ import {
   MakerCreatePutOptionParams, 
   getVaultFactoryPdaAddress, 
   getVaultDerivedPdaAddresses, 
-  getUserVaultAssociatedAccountAddress,
+  getMakerVaultAssociatedAccountAddress,
   getAllMaybeNotMaturedFactories,
   getVaultsForPutFactory,
   getUserMakerInfoAllVaults,
@@ -30,6 +30,9 @@ const TEST_PUT_TAKER_KEY = [198,219,91,244,252,118,0,25,83,232,178,61,51,196,168
 
 // The corresponding pubkey of this key is what we should put in pyutil/replaceMint.py to generate the mocks USDC and WBTC
 const TEST_MOCK_MINTER_KEY = [109,3,86,101,96,42,254,204,98,232,34,172,105,37,112,24,223,194,66,133,2,105,54,228,54,97,90,111,253,35,245,73,93,83,136,36,51,237,111,8,250,149,126,98,135,211,138,191,207,116,66,179,204,231,147,190,217,190,220,93,181,102,164,238]
+
+// This is the where protocol fees will go, its pubkey is in lib.rs. MUST CHANGE IN REAL DEPLOYMENT
+const TEST_PROTOCOL_FEES_KEY = [170,187,172,146,241,33,174,135,129,205,0,108,30,54,58,190,112,43,95,133,59,63,136,89,167,183,88,187,65,45,66,214,212,13,191,146,112,52,37,80,118,225,123,85,122,18,26,51,145,227,30,224,105,163,126,21,155,210,207,191,239,81,83,244]
 
 function keyPairFromSecret(secret: number[]): anchor.web3.Keypair {
   const secretKey = Uint8Array.from(secret)
@@ -126,6 +129,7 @@ describe("anchor-solhedge", () => {
   const putMaker2Keypair = keyPairFromSecret(TEST_PUT_MAKER2_KEY)
 
   const putTakerKeypair = keyPairFromSecret(TEST_PUT_TAKER_KEY)
+  const protocolFeesKeypair = keyPairFromSecret(TEST_PROTOCOL_FEES_KEY)
 
   const usdcToken = new anchor.web3.PublicKey("EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v")
   const wormholeBTCToken = new anchor.web3.PublicKey("3NZ9JMVBmGAqocybic2c7LQCJScmgsAZ6vQqTDzcqmJh")
@@ -162,8 +166,11 @@ describe("anchor-solhedge", () => {
         airdropSolIfNeeded(
           putTakerKeypair,
           anchor.getProvider().connection
+        ),
+        airdropSolIfNeeded(
+          protocolFeesKeypair,
+          anchor.getProvider().connection
         )
-
       ]
       await Promise.all(airdrops)
     } 
@@ -243,7 +250,7 @@ describe("anchor-solhedge", () => {
       vaultQuoteAssetTreasury
     } = await getVaultDerivedPdaAddresses(program, putOptionVaultFactoryAddress, wormholeBTCToken, usdcToken, vaultNumber)
 
-    const userAVA = getUserVaultAssociatedAccountAddress(program, putOptionVaultFactoryAddress, vaultNumber, putMakerKeypair.publicKey)
+    //const userAVA = getMakerVaultAssociatedAccountAddress(program, putOptionVaultFactoryAddress, vaultNumber, putMakerKeypair.publicKey)
 
     var tx2 = await program.methods.makerCreatePutOptionVault(vaultParams, vaultNumber).accounts({
       initializer: putMakerKeypair.publicKey,
@@ -430,7 +437,47 @@ describe("anchor-solhedge", () => {
     sellers = await getSellersInVault(program, vaultInfo.publicKey, updatedVaultFactory.lastFairPrice.toNumber(), slippageTolerance)
     // console.log('sellers in vault')
     // console.log(sellers)
+
+    const putTakerUSDCATA = await createTokenAccount(conn, minterKeypair, usdcToken, putTakerKeypair.publicKey)
     
+    const usdcMintAmountTaker = 10000
+    await mintTokens(conn, minterKeypair, usdcToken, putTakerUSDCATA.address, minterKeypair, usdcMintAmountTaker)
+    console.log('Minted 10k usdc to test put taker, in order to pay put option premium')
+
+    const putTakerwBTCATA = await createTokenAccount(conn, minterKeypair, wormholeBTCToken, putTakerKeypair.publicKey)
+    const wBTCMintAmountTaker = 10
+    await mintTokens(conn, minterKeypair, wormholeBTCToken, putTakerwBTCATA.address, minterKeypair, wBTCMintAmountTaker)
+    console.log('Minted 10 wBTC to test put taker, he will eventually fund his put option from here')
+
+    //Lets suppose put taker slippage tolerance is 5%
+    const myMaxPrice = Math.floor(updatedVaultFactory.lastFairPrice.toNumber()*1.05)
+    // notice that we defined above that the lot size of our vault is 0.001 bitcoin
+    // first maker in the vault is selling 1000 lots
+    // second maker in the vault is selling 500 lots
+    // we are buying the right to sell 600 lots, that is 0.6 bitcoin
+    // however the taker will initially fund the option with only 0.1 bitcoin
+    const btcLamports = Math.round(0.1*(10 ** mintInfoWBTC.decimals))
+    const takerLots = 600
+
+    const protocolFeesUSDCATA = await createTokenAccount(conn, minterKeypair, usdcToken, protocolFeesKeypair.publicKey)
+
+    let tx8 = await program.methods.takerBuyLotsPutOptionVault(
+      new anchor.BN(myMaxPrice), 
+      new anchor.BN(takerLots), 
+      new anchor.BN(btcLamports)).accounts({
+        baseAssetMint: wormholeBTCToken,
+        quoteAssetMint: usdcToken,
+        initializer: putTakerKeypair.publicKey,
+        protocolQuoteAssetTreasury: protocolFeesUSDCATA.address,
+        frontendQuoteAssetTreasury: protocolFeesUSDCATA.address, //also sending frontend share to protocol in this test
+        takerBaseAssetAccount: putTakerwBTCATA.address,
+        takerQuoteAssetAccount: putTakerUSDCATA.address,
+        vaultFactoryInfo: putOptionVaultFactoryAddress2,
+        vaultInfo: vaultInfo.publicKey,
+        vaultBaseAssetTreasury: vaultBaseAssetTreasury2,
+      }).signers([putTakerKeypair]).rpc()
+
+      console.log("ALL DONE")
 
   });
 

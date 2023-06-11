@@ -39,7 +39,11 @@ const MAX_SECONDS_FROM_LAST_FAIR_PRICE_UPDATE: u64 = 60;
 //30 days in the future
 const MAX_MATURITY_FUTURE_SECONDS: u64 = 30*24*60*60;
 
+// The corresponding private key is public on oracle.ts and on github! MUST CHANGE ON REAL DEPLOYMENT!
 const ORACLE_ADDRESS: Pubkey = pubkey!("9SBVhfXD73uNe9hQRLBBmzgY7PZUTQYGaa6aPM7Gqo68");
+
+// The corresponding private key is public on anchor-solhedge.ts and on github! MUST CHANGE ON REAL DEPLOYMENT!
+const PROTOCOL_FEES_ADDRESS: Pubkey = pubkey!("FGmbHBRXPe6gRUe9MzuRUVaCsnViUvvWpuyTD8sV8tuh");
 
 #[program]
 pub mod anchor_solhedge {
@@ -180,7 +184,51 @@ pub mod anchor_solhedge {
             PutOptionError::LastFairPriceUpdateTooOld
         );
 
+        require!(
+            max_fair_price >= ctx.accounts.vault_factory_info.last_fair_price,
+            PutOptionError::MaxFairPriceTooLow
+        );
 
+        let lot_multiplier:f64 = 10.0f64.powf(ctx.accounts.vault_info.lot_size as f64);
+        require!(
+            lot_multiplier.is_finite(),
+            PutOptionError::Overflow
+        );
+
+        let base_asset_max_amount_f64 = (num_lots_to_buy as f64)*lot_multiplier;
+        require!(
+            base_asset_max_amount_f64.is_finite(),
+            PutOptionError::Overflow
+        );
+
+        let lamports_base_asset_max_amount_f64 = base_asset_max_amount_f64 * 10.0f64.powf(ctx.accounts.base_asset_mint.decimals as f64);
+        require!(
+            lamports_base_asset_max_amount_f64.is_finite(),
+            PutOptionError::Overflow
+        );
+        
+        let wanted_options_lamport_amount = lamports_base_asset_max_amount_f64.round() as u64;
+
+        //fair price has how much does it cost to buy a put option for 1 base asset
+        //lets see how much it would cost (in lamports of quote asset) for each lamport of base asset
+        let option_premium_per_lamport:f64 = ctx.accounts.vault_factory_info.last_fair_price as f64 / 10.0f64.powf(ctx.accounts.base_asset_mint.decimals as f64);
+        require!(
+            option_premium_per_lamport.is_finite(),
+            PutOptionError::Overflow
+        );
+
+
+        //now we know the taker wants to buy put options for the amount of 
+        //<wanted_options_lamport_amount> of base asset. 
+        //The option premium for each one of this lamports is
+        //<option_premium_per_lamport> in lamports of quote asset
+
+        //FIXME CONTINUE
+        //Now implement the taking of accounts of makers and their corresponding
+        //quote assets ATA to receive option premium when the taker buys from them. 
+
+        // not like below, only what he can effectively buy from users
+        // ctx.accounts.put_option_taker_info.max_base_asset = lamports_base_asset_max_amount_f64.round() as u64;
         Ok(())
     }
 
@@ -494,13 +542,36 @@ pub struct TakerBuyLotsPutOptionVault<'info> {
     )]
     pub vault_base_asset_treasury: Box<Account<'info, TokenAccount>>,
 
+    // to pay the option premium (fair price)
     #[account(
         mut,
         constraint = taker_quote_asset_account.owner.key() == initializer.key(),
-        constraint = taker_quote_asset_account.mint == base_asset_mint.key()
+        constraint = taker_quote_asset_account.mint == quote_asset_mint.key()
     )]
     pub taker_quote_asset_account: Box<Account<'info, TokenAccount>>,
 
+    // deposit of initial funding will come from here
+    #[account(
+        mut,
+        constraint = taker_base_asset_account.owner.key() == initializer.key(),
+        constraint = taker_base_asset_account.mint == base_asset_mint.key()
+    )]
+    pub taker_base_asset_account: Box<Account<'info, TokenAccount>>,
+
+    // protocol fees will be paid here
+    #[account(
+        mut,
+        constraint = protocol_quote_asset_treasury.owner.key() == PROTOCOL_FEES_ADDRESS,
+        constraint = protocol_quote_asset_treasury.mint == quote_asset_mint.key()
+    )]
+    pub protocol_quote_asset_treasury: Box<Account<'info, TokenAccount>>,
+
+    // frontend fees will be paid here
+    #[account(
+        mut,
+        constraint = frontend_quote_asset_treasury.mint == quote_asset_mint.key()
+    )]
+    pub frontend_quote_asset_treasury: Box<Account<'info, TokenAccount>>,
 
     // Check if initializer is signer, mut is required to reduce lamports (fees)
     #[account(mut)]
@@ -981,6 +1052,9 @@ pub enum PutOptionError {
     TakersFull,
 
     #[msg("Last fair price update is too old. Please ask the oracle to make a new update")]
-    LastFairPriceUpdateTooOld
+    LastFairPriceUpdateTooOld,
+
+    #[msg("Your max fair price is below current fair price")]
+    MaxFairPriceTooLow
 
 }    

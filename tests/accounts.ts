@@ -65,7 +65,7 @@ export const getUserTicketAccountAddressForVaultFactory = async (
   return ticketAccountAddress
 }
 
-export const getUserVaultAssociatedAccountAddress = async (
+export const getMakerVaultAssociatedAccountAddress = async (
   program: anchor.Program<AnchorSolhedge>,
   vaultFactoryInfo: anchor.web3.PublicKey,
   vaultId: anchor.BN,
