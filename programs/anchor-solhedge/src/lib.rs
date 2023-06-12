@@ -146,6 +146,17 @@ pub mod anchor_solhedge {
         initial_funding: u64
     ) -> Result<()> {
 
+        require!(
+            ctx.remaining_accounts.len() > 0,
+            PutOptionError::EmptyRemainingAccounts
+        );
+
+        require!(
+            ctx.remaining_accounts.len() % 2 == 0,
+            PutOptionError::RemainingAccountsNumIsOdd
+        );
+
+
         let current_time = Clock::get().unwrap().unix_timestamp as u64;
         require!(
             ctx.accounts.vault_factory_info.maturity > current_time.checked_add(FREEZE_SECONDS).unwrap(),
@@ -1080,6 +1091,12 @@ pub enum PutOptionError {
     LastFairPriceUpdateTooOld,
 
     #[msg("Your max fair price is below current fair price")]
-    MaxFairPriceTooLow
+    MaxFairPriceTooLow,
+
+    #[msg("Remaining accounts are empty")]
+    EmptyRemainingAccounts,
+  
+    #[msg("Quantity of remaining accounts is odd, should be even")]
+    RemainingAccountsNumIsOdd
 
 }    

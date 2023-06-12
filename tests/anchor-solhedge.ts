@@ -468,6 +468,83 @@ describe("anchor-solhedge", () => {
     let sellersAndATAS = await getMakerATAs(program, sellers, usdcToken)
     console.log("SELLERS AND ATAS")
     console.log(sellersAndATAS)
+    const quoteAssetByLot = (10**vaultInfo.account.lotSize)*updatedVaultFactory.strike.toNumber()
+    const lotsInQuoteAsset = takerLots*quoteAssetByLot
+    console.log(`${takerLots} lots of ${10**vaultInfo.account.lotSize} at strike price ${updatedVaultFactory.strike.toNumber()} mean ${lotsInQuoteAsset} in USDC lamports`)
+    
+    // will we get the first 4, and the 5st may be one later if the fourth does not complete
+    // enough demand
+    var i = 0
+    let remainingAccounts = []
+    for (const [putOptionMakerInfo, makerATA] of sellersAndATAS) {
+      let potentialLots = 0
+      if (i < 4) {
+        const remAccountInfo = {
+          pubkey: putOptionMakerInfo.publicKey,
+          isWritable: true,
+          isSigner: false
+        }
+        const remAccountATA = {
+          pubkey: makerATA.address,
+          isWritable: true,
+          isSigner: false
+        }
+        remainingAccounts.push(remAccountInfo);
+        remainingAccounts.push(remAccountATA);
+        const quoteAssetAvailable = putOptionMakerInfo.account.quoteAssetQty.toNumber() - putOptionMakerInfo.account.volumeSold.toNumber()
+        const userPotentialLots = Math.floor(quoteAssetAvailable/quoteAssetByLot)
+        potentialLots += userPotentialLots
+        console.log(`User ${i} has at most ${userPotentialLots} lots to sell`)
+      } else if (remainingAccounts.length >= 5) {
+        break;
+      } else if (i < sellersAndATAS.length-1){
+        const quoteAssetAvailable = putOptionMakerInfo.account.quoteAssetQty.toNumber() - putOptionMakerInfo.account.volumeSold.toNumber()
+        const userPotentialLots = Math.floor(quoteAssetAvailable/quoteAssetByLot)
+        if (potentialLots + userPotentialLots >= takerLots) {
+          const remAccountInfo = {
+            pubkey: putOptionMakerInfo.publicKey,
+            isWritable: true,
+            isSigner: false
+          }
+          const remAccountATA = {
+            pubkey: makerATA.address,
+            isWritable: true,
+            isSigner: false
+          }
+          remainingAccounts.push(remAccountInfo);
+          remainingAccounts.push(remAccountATA);
+          potentialLots += userPotentialLots;
+          break; 
+        }
+      } else {
+        // last chance, this last one or the 5th
+        let quoteAssetAvailable = putOptionMakerInfo.account.quoteAssetQty.toNumber() - putOptionMakerInfo.account.volumeSold.toNumber()
+        let userPotentialLots = Math.floor(quoteAssetAvailable/quoteAssetByLot)
+        let makerPubkey = putOptionMakerInfo.publicKey
+        let ataPubkey = makerATA.address
+        if (potentialLots + userPotentialLots < takerLots) {
+          makerPubkey = sellersAndATAS[4][0].publicKey
+          ataPubkey = sellersAndATAS[4][1].address
+          quoteAssetAvailable = sellersAndATAS[4][0].account.quoteAssetQty.toNumber() - sellersAndATAS[4][0].account.volumeSold.toNumber()
+          userPotentialLots = Math.floor(quoteAssetAvailable/quoteAssetByLot)
+        }
+        const remAccountInfo = {
+          pubkey: makerPubkey,
+          isWritable: true,
+          isSigner: false
+        }
+        const remAccountATA = {
+          pubkey: ataPubkey,
+          isWritable: true,
+          isSigner: false
+        }
+        remainingAccounts.push(remAccountInfo);
+        remainingAccounts.push(remAccountATA);
+        potentialLots += userPotentialLots;
+        break;
+      }
+      i++;
+    }
 
     let tx8 = await program.methods.takerBuyLotsPutOptionVault(
       new anchor.BN(myMaxPrice), 
@@ -483,7 +560,9 @@ describe("anchor-solhedge", () => {
         vaultFactoryInfo: putOptionVaultFactoryAddress2,
         vaultInfo: vaultInfo.publicKey,
         vaultBaseAssetTreasury: vaultBaseAssetTreasury2,
-      }).signers([putTakerKeypair]).rpc()
+      }).remainingAccounts(
+        remainingAccounts
+      ).signers([putTakerKeypair]).rpc()
 
       console.log("ALL DONE")
 
