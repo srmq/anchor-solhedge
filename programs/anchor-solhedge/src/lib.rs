@@ -154,7 +154,7 @@ pub mod anchor_solhedge {
         require!(
             ctx.remaining_accounts.len() % 2 == 0,
             PutOptionError::RemainingAccountsNumIsOdd
-        );
+        );      
 
 
         let current_time = Clock::get().unwrap().unix_timestamp as u64;
@@ -233,6 +233,29 @@ pub mod anchor_solhedge {
         //<wanted_options_lamport_amount> of base asset. 
         //The option premium for each one of this lamports is
         //<option_premium_per_lamport> in lamports of quote asset
+
+        for i in 0..(ctx.remaining_accounts.len()/2) {
+
+            let maker_info: Account<PutOptionMakerInfo> = PutOptionMakerInfo::from(&ctx.remaining_accounts[2*i]);
+            let maker_ata: Account<TokenAccount> = Account::try_from(&ctx.remaining_accounts[2*i + 1])?;
+
+            require!(
+                maker_info.owner == maker_ata.owner,
+                PutOptionError::AccountValidationError
+            );
+
+            require!(
+                maker_info.put_option_vault == ctx.accounts.vault_info.key(),
+                PutOptionError::AccountValidationError
+            );
+
+            require!(
+                maker_ata.mint == ctx.accounts.quote_asset_mint.key(),
+                PutOptionError::AccountValidationError
+            );
+            
+            //XXX FIXME continue
+        }
 
         //FIXME CONTINUE
         //Now implement the taking of accounts of makers and their corresponding
@@ -1097,6 +1120,9 @@ pub enum PutOptionError {
     EmptyRemainingAccounts,
   
     #[msg("Quantity of remaining accounts is odd, should be even")]
-    RemainingAccountsNumIsOdd
+    RemainingAccountsNumIsOdd,
+
+    #[msg("Account validation error")]
+    AccountValidationError
 
 }    
