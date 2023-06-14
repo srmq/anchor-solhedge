@@ -23,9 +23,6 @@ use solana_program::{pubkey, pubkey::Pubkey, sysvar::clock::Clock};
 
 declare_id!("8DYMPBKLDULX6G7ZuNrs1FcjuMqJwefu2MEfxkCq4sWY");
 
-//const MAKER_COMISSION_PERCENT: f64 = 0.1;
-//const TAKER_COMISSION_PERCENT: f64 = 0.1;
-
 //Options will be negotiated up to 30 minutes to maturity
 const FREEZE_SECONDS: u64 = 30*60;
 
@@ -140,7 +137,7 @@ pub mod anchor_solhedge {
         Ok(result)
     }
 
-    //remember, oracle should have written last fair price at most x minutes before
+    //remember, oracle should have written last fair price at most MAX_SECONDS_FROM_LAST_FAIR_PRICE_UPDATE before
     pub fn taker_buy_lots_put_option_vault<'info>(ctx: Context<'_, '_, '_, 'info, TakerBuyLotsPutOptionVault<'info>>,
         max_fair_price: u64,
         num_lots_to_buy: u64,
@@ -309,7 +306,7 @@ pub mod anchor_solhedge {
 
                 {
                     let cpi_program = ctx.accounts.token_program.to_account_info();
-                    msg!("Started transferring frontend fee lamports to protocol"); //FIXME errado
+                    msg!("Started transferring frontend fee lamports to protocol");
                     let cpi_accounts = Transfer {
                         from: ctx.accounts.taker_quote_asset_account.to_account_info(),
                         to: ctx.accounts.frontend_quote_asset_treasury.to_account_info(),
