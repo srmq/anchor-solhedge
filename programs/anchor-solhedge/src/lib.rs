@@ -144,7 +144,7 @@ pub mod anchor_solhedge {
         initial_funding: u64
     ) -> Result<u64> {
 
-        // Must pass PutOptionMakerInfo and quote ATAs (to receive premium) of potential sellers
+        // Must pass PutOptionMakerInfo and corresponding quote asset ATAs (to receive premium) of potential sellers
         // in remaining accounts
         require!(
             ctx.remaining_accounts.len() > 0,
@@ -254,6 +254,7 @@ pub mod anchor_solhedge {
             if lots_from_this_maker > 0 {
                 let reserve_amount = lots_from_this_maker.checked_mul(lot_price_in_quote_lamports).unwrap();
                 maker_info.volume_sold = maker_info.volume_sold.checked_add(reserve_amount).unwrap();
+                ctx.accounts.vault_info.makers_total_pending_sell = ctx.accounts.vault_info.makers_total_pending_sell.checked_sub(reserve_amount).unwrap();
                 let new_avbl_quote_asset = maker_info.quote_asset_qty.checked_sub(maker_info.volume_sold).unwrap();
                 let new_avbl_lots = new_avbl_quote_asset.checked_div(lot_price_in_quote_lamports).unwrap();
                 if new_avbl_lots < 1 {
@@ -357,10 +358,14 @@ pub mod anchor_solhedge {
                     token::transfer(token_transfer_context, base_asset_transfer_qty)?;
                     msg!("Finished transferring base assets to fund option")
                 }            
-    
+                ctx.accounts.vault_info.takers_total_deposited = ctx.accounts.vault_info.takers_total_deposited.checked_add(base_asset_transfer_qty).unwrap();
                 ctx.accounts.put_option_taker_info.qty_deposited = ctx.accounts.put_option_taker_info.qty_deposited.checked_add(base_asset_transfer_qty).unwrap();
             }    
         }
+        require!(
+            ctx.accounts.vault_info.takers_total_deposited == ctx.accounts.vault_base_asset_treasury.amount,
+            PutOptionError::IllegalState
+        );
         Ok(total_lots_bought)
     }
 
