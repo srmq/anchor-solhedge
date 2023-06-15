@@ -362,10 +362,6 @@ pub mod anchor_solhedge {
                 ctx.accounts.put_option_taker_info.qty_deposited = ctx.accounts.put_option_taker_info.qty_deposited.checked_add(base_asset_transfer_qty).unwrap();
             }    
         }
-        require!(
-            ctx.accounts.vault_info.takers_total_deposited == ctx.accounts.vault_base_asset_treasury.amount,
-            PutOptionError::IllegalState
-        );
         Ok(total_lots_bought)
     }
 
