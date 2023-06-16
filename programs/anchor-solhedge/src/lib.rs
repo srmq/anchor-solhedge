@@ -27,6 +27,7 @@ declare_id!("8DYMPBKLDULX6G7ZuNrs1FcjuMqJwefu2MEfxkCq4sWY");
 const FREEZE_SECONDS: u64 = 30*60;
 
 const LAMPORTS_FOR_UPDATE_FAIRPRICE_TICKET: u64 = 500000;
+const LAMPORTS_FOR_UPDATE_SETTLEPRICE_TICKET: u64 = 500000;
 
 const MAX_SECONDS_FROM_LAST_FAIR_PRICE_UPDATE: u64 = 60;
 
@@ -51,11 +52,38 @@ pub mod anchor_solhedge {
     #[derive(AnchorSerialize, AnchorDeserialize)]
     pub struct TakerBuyLotsPutOptionReturn {
         pub num_lots_bought: u64,
-        pub price: u64
+        pub price: u64,
+        pub funding_added: u64
     }
 
     pub fn initialize(_ctx: Context<Initialize>) -> Result<()> {
         Ok(())
+    }
+
+// FIXME TODO: implement oracle side in oracle.ts
+    pub fn oracle_update_settle_price(
+        ctx: Context<OracleUpdateSettlePrice>,
+        settle_price: u64
+    ) -> Result<()> {
+        require!(
+            settle_price > 0,
+            PutOptionError::PriceZero
+        );
+        let current_time = Clock::get().unwrap().unix_timestamp as u64;
+        require!(
+            ctx.accounts.vault_factory_info.maturity < current_time,
+            PutOptionError::MaturityTooLate
+        );
+
+        if !ctx.accounts.vault_factory_info.matured {
+            ctx.accounts.vault_factory_info.settled_price = settle_price;
+            ctx.accounts.vault_factory_info.matured = true;
+        }
+
+        ctx.accounts.update_ticket.is_used = true;
+
+        Ok(())
+
     }
 
     pub fn oracle_update_price(
@@ -67,13 +95,38 @@ pub mod anchor_solhedge {
             PutOptionError::PriceZero
         );
 
-
         let current_time = Clock::get().unwrap().unix_timestamp as u64;
         if ctx.accounts.vault_factory_info.maturity > current_time.checked_add(FREEZE_SECONDS).unwrap() {
             ctx.accounts.vault_factory_info.last_fair_price = new_fair_price;
             ctx.accounts.vault_factory_info.ts_last_fair_price = current_time;
         }
         ctx.accounts.update_ticket.is_used = true;
+        Ok(())
+    }
+
+    pub fn gen_settle_put_option_price_ticket(ctx: Context<GenSettlePutOptionPriceTicket>) -> Result<()> {
+        require!(
+            ctx.accounts.put_option_settle_price_ticket.is_used == false,
+            PutOptionError::UsedUpdateTicket
+        );
+        let current_time = Clock::get().unwrap().unix_timestamp as u64;
+        require!(
+            ctx.accounts.vault_factory_info.maturity < current_time,
+            PutOptionError::MaturityTooLate
+        );
+
+        msg!("Started transferring lamports to oracle");
+        let oracle_fee_transfer_cpi_context = CpiContext::new(
+            ctx.accounts.system_program.to_account_info(),
+            system_program::Transfer {
+                from: ctx.accounts.initializer.to_account_info(),
+                to: ctx.accounts.oracle_wallet.to_account_info()
+            }
+        );
+        system_program::transfer(oracle_fee_transfer_cpi_context, LAMPORTS_FOR_UPDATE_SETTLEPRICE_TICKET)?;
+        msg!("Finished transferring lamports to oracle");
+
+
         Ok(())
     }
 
@@ -154,15 +207,57 @@ pub mod anchor_solhedge {
             PutOptionError::MaturityTooEarly
         );
 
-        let final_funding = ctx.accounts.put_option_taker_info.qty_deposited;
+        let mut final_funding = ctx.accounts.put_option_taker_info.qty_deposited;
         if new_funding > ctx.accounts.put_option_taker_info.qty_deposited {
             // user wants to increase funding
-            //FIXME continue
+            let wanted_increase_amount = new_funding.checked_sub(ctx.accounts.put_option_taker_info.qty_deposited).unwrap();
+            let max_increase_amount = ctx.accounts.put_option_taker_info.max_base_asset.checked_sub(ctx.accounts.put_option_taker_info.qty_deposited).unwrap();
+            let increase_amount = std::cmp::min(wanted_increase_amount, max_increase_amount);
+            if increase_amount > 0 {
+                {
+                    let cpi_program = ctx.accounts.token_program.to_account_info();
+                    msg!("Started transferring base assets to increase funding for option");
+                    let cpi_accounts = Transfer {
+                        from: ctx.accounts.taker_base_asset_account.to_account_info(),
+                        to: ctx.accounts.vault_base_asset_treasury.to_account_info(),
+                        authority: ctx.accounts.initializer.to_account_info(),
+                    };
+                    let token_transfer_context = CpiContext::new(cpi_program, cpi_accounts);
+                    token::transfer(token_transfer_context, increase_amount)?;
+                    msg!("Finished transferring base assets to increase funding for option");
+                }            
+                final_funding = final_funding.checked_add(increase_amount).unwrap();
+                ctx.accounts.put_option_taker_info.qty_deposited = final_funding;
+                ctx.accounts.vault_info.takers_total_deposited = ctx.accounts.vault_info.takers_total_deposited.checked_add(increase_amount).unwrap();
+            }
 
         } else if new_funding < ctx.accounts.put_option_taker_info.qty_deposited {
-            // user wants to decrease funding
-            //FIXME continue
+            let decrease_amount = ctx.accounts.put_option_taker_info.qty_deposited.checked_sub(new_funding).unwrap();
+            // Proceed to transfer 
+            let cpi_program = ctx.accounts.token_program.to_account_info();
+            let cpi_accounts = Transfer {
+                from: ctx.accounts.vault_base_asset_treasury.to_account_info(),
+                to: ctx.accounts.taker_base_asset_account.to_account_info(),
+                authority: ctx.accounts.vault_info.to_account_info(),
+            };
 
+            // Preparing PDA signer
+            let auth_bump = *ctx.bumps.get("vault_info").unwrap();
+            let seeds = &[
+                "PutOptionVaultInfo".as_bytes().as_ref(), 
+                &ctx.accounts.vault_factory_info.key().to_bytes(),
+                &ctx.accounts.vault_info.ord.to_le_bytes(),
+                &[auth_bump],
+            ];
+            let signer = &[&seeds[..]];
+    
+
+            let token_transfer_context = CpiContext::new_with_signer(cpi_program, cpi_accounts, signer);
+
+            token::transfer(token_transfer_context, decrease_amount)?;
+            final_funding = new_funding;
+            ctx.accounts.put_option_taker_info.qty_deposited = new_funding;
+            ctx.accounts.vault_info.takers_total_deposited = ctx.accounts.vault_info.takers_total_deposited.checked_sub(decrease_amount).unwrap();
         }
         
         Ok(final_funding)
@@ -365,6 +460,7 @@ pub mod anchor_solhedge {
             PutOptionError::IllegalState
         );
 
+        let mut base_asset_transfer_qty:u64 = 0;
         if total_lots_bought > 0 {
             let max_initial_funding_base_lamports_f64 = (total_lots_bought as f64)*lot_multiplier*(10.0f64.powf(ctx.accounts.base_asset_mint.decimals as f64));
             require!(
@@ -375,7 +471,7 @@ pub mod anchor_solhedge {
             ctx.accounts.put_option_taker_info.max_base_asset = ctx.accounts.put_option_taker_info.max_base_asset.checked_add(max_initial_funding_base_lamports).unwrap();
             if initial_funding > 0 {
                 let missing_funding = ctx.accounts.put_option_taker_info.max_base_asset.checked_sub(ctx.accounts.put_option_taker_info.qty_deposited).unwrap();
-                let base_asset_transfer_qty = std::cmp::min(initial_funding, missing_funding);
+                base_asset_transfer_qty = std::cmp::min(initial_funding, missing_funding);
                 
                 {
                     let cpi_program = ctx.accounts.token_program.to_account_info();
@@ -395,7 +491,8 @@ pub mod anchor_solhedge {
         }
         let result = TakerBuyLotsPutOptionReturn {
             num_lots_bought: total_lots_bought,
-            price: ctx.accounts.vault_factory_info.last_fair_price
+            price: ctx.accounts.vault_factory_info.last_fair_price,
+            funding_added: base_asset_transfer_qty
         };
         Ok(result)
     }
@@ -849,6 +946,45 @@ pub struct TakerBuyLotsPutOptionVault<'info> {
 
 #[derive(Accounts)]
 #[instruction(
+    settle_price: u64
+)]
+pub struct OracleUpdateSettlePrice<'info> {
+    #[account(
+        mut,
+        constraint = vault_factory_info.strike > 0,
+        constraint = vault_factory_info.is_initialized == true,
+    )]
+    pub vault_factory_info: Account<'info, PutOptionVaultFactoryInfo>,
+
+    #[account(
+        mut,
+        seeds=["PutOptionSettlePriceTicketInfo".as_bytes().as_ref(), vault_factory_info.key().as_ref(), ticket_owner.key().as_ref()],
+        bump,
+        close = ticket_owner,
+        constraint = update_ticket.is_used == false, 
+    )]
+    pub update_ticket: Account<'info, PutOptionSettlePriceTicketInfo>,
+
+    #[account(
+        mut
+    )]
+    pub ticket_owner: SystemAccount<'info>,
+
+    // Check if initializer is signer, should also be the oracle, mut is required to reduce lamports (fees)
+    #[account(
+        mut,
+        constraint = initializer.key() == ORACLE_ADDRESS
+    )]
+    pub initializer: Signer<'info>,
+
+    // System Program requred for deduction of lamports (fees)
+    pub system_program: Program<'info, System>
+
+}
+
+
+#[derive(Accounts)]
+#[instruction(
     new_fair_price: u64
 )]
 
@@ -880,6 +1016,39 @@ pub struct OracleUpdateFairPrice<'info> {
         constraint = initializer.key() == ORACLE_ADDRESS
     )]
     pub initializer: Signer<'info>,
+
+    // System Program requred for deduction of lamports (fees)
+    pub system_program: Program<'info, System>
+
+}
+
+#[derive(Accounts)]
+pub struct GenSettlePutOptionPriceTicket<'info> {
+    #[account(
+        constraint = vault_factory_info.strike > 0,
+        constraint = vault_factory_info.matured == false,
+        constraint = vault_factory_info.is_initialized == true
+    )]
+    pub vault_factory_info: Account<'info, PutOptionVaultFactoryInfo>,
+
+    #[account(
+        init,
+        seeds=["PutOptionSettlePriceTicketInfo".as_bytes().as_ref(), vault_factory_info.key().as_ref(), initializer.key().as_ref()],
+        bump,
+        payer = initializer,
+        space = std::mem::size_of::<PutOptionSettlePriceTicketInfo>() + 8,
+    )]
+    pub put_option_settle_price_ticket: Account<'info, PutOptionSettlePriceTicketInfo>,
+
+    // Check if initializer is signer, mut is required to reduce lamports (fees)
+    #[account(mut)]
+    pub initializer: Signer<'info>,
+
+    #[account(
+        mut,
+        constraint = oracle_wallet.key() == ORACLE_ADDRESS
+    )]
+    pub oracle_wallet: SystemAccount<'info>,
 
     // System Program requred for deduction of lamports (fees)
     pub system_program: Program<'info, System>
@@ -1235,6 +1404,12 @@ impl PutOptionMakerInfo {
     fn from<'info>(info: &AccountInfo<'info>) -> Account<'info, Self> {
         Account::try_from(info).unwrap()
     }
+}
+
+#[account]
+pub struct PutOptionSettlePriceTicketInfo {
+    is_used: bool,
+    factory_vault: Pubkey
 }
 
 
