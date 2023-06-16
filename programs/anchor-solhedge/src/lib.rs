@@ -143,6 +143,31 @@ pub mod anchor_solhedge {
         Ok(result)
     }
 
+    pub fn taker_adjust_funding_put_option_vault(ctx: Context<TakerAdjustFundingPutOptionVault>,
+        new_funding: u64
+    ) -> Result<u64> {
+
+        let current_time = Clock::get().unwrap().unix_timestamp as u64;
+        // Period to adjust funding is already closed
+        require!(
+            ctx.accounts.vault_factory_info.maturity > current_time.checked_add(FREEZE_SECONDS).unwrap(),
+            PutOptionError::MaturityTooEarly
+        );
+
+        let final_funding = ctx.accounts.put_option_taker_info.qty_deposited;
+        if new_funding > ctx.accounts.put_option_taker_info.qty_deposited {
+            // user wants to increase funding
+            //FIXME continue
+
+        } else if new_funding < ctx.accounts.put_option_taker_info.qty_deposited {
+            // user wants to decrease funding
+            //FIXME continue
+
+        }
+        
+        Ok(final_funding)
+    }
+
     //remember, oracle should have written last fair price at most MAX_SECONDS_FROM_LAST_FAIR_PRICE_UPDATE before
     pub fn taker_buy_lots_put_option_vault<'info>(ctx: Context<'_, '_, '_, 'info, TakerBuyLotsPutOptionVault<'info>>,
         max_fair_price: u64,
@@ -650,6 +675,77 @@ pub mod anchor_solhedge {
 
 #[derive(Accounts)]
 pub struct Initialize {}
+
+#[derive(Accounts)]
+#[instruction(
+    new_funding: u64
+)]
+pub struct TakerAdjustFundingPutOptionVault<'info> {
+    #[account(
+        constraint = vault_factory_info.strike > 0,
+        constraint = vault_factory_info.is_initialized == true,
+        constraint = vault_factory_info.matured == false,
+        constraint = vault_factory_info.base_asset == base_asset_mint.key(),
+        constraint = vault_factory_info.quote_asset == quote_asset_mint.key(),
+
+    )]
+    pub vault_factory_info: Account<'info, PutOptionVaultFactoryInfo>,
+
+    #[account(
+        mut,
+        seeds=[
+            "PutOptionVaultInfo".as_bytes().as_ref(), 
+            vault_factory_info.key().as_ref(),
+            vault_info.ord.to_le_bytes().as_ref()
+        ], bump,
+        constraint = vault_info.factory_vault == vault_factory_info.key(),
+    )]
+    pub vault_info: Account<'info, PutOptionVaultInfo>,
+
+    #[account(
+        mut,
+        seeds=[
+            "PutOptionTakerInfo".as_bytes().as_ref(),
+            vault_factory_info.key().as_ref(),
+            vault_info.ord.to_le_bytes().as_ref(), 
+            initializer.key().as_ref()
+        ],
+        bump,
+        constraint = !put_option_taker_info.is_settled
+    )]
+    pub put_option_taker_info: Account<'info, PutOptionTakerInfo>,
+
+    // mint for the base_asset
+    pub base_asset_mint: Account<'info, Mint>,
+
+    // mint for the quote asset
+    pub quote_asset_mint: Account<'info, Mint>,
+
+    #[account(
+        mut,
+        constraint = vault_base_asset_treasury.mint == base_asset_mint.key(), // Base asset mint
+        constraint = vault_base_asset_treasury.owner.key() == vault_info.key() // Authority set to vault PDA
+    )]
+    pub vault_base_asset_treasury: Box<Account<'info, TokenAccount>>,
+
+    // deposit of funding will come/go from/to this account
+    #[account(
+        mut,
+        constraint = taker_base_asset_account.owner.key() == initializer.key(),
+        constraint = taker_base_asset_account.mint == base_asset_mint.key()
+    )]
+    pub taker_base_asset_account: Box<Account<'info, TokenAccount>>,
+
+    // Check if initializer is signer, mut is required to reduce lamports (fees)
+    #[account(mut)]
+    pub initializer: Signer<'info>,
+    
+    // System Program requred for deduction of lamports (fees)
+    pub system_program: Program<'info, System>,
+    // Token Program required to call transfer instruction
+    pub token_program: Program<'info, Token>,
+    pub associated_token_program: Program<'info, AssociatedToken>
+}
 
 #[derive(Accounts)]
 #[instruction(
