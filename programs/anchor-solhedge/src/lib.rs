@@ -48,6 +48,12 @@ pub mod anchor_solhedge {
     use super::*;
     use anchor_spl::token::Transfer;
 
+    #[derive(AnchorSerialize, AnchorDeserialize)]
+    pub struct TakerBuyLotsPutOptionReturn {
+        pub num_lots_bought: u64,
+        pub price: u64
+    }
+
     pub fn initialize(_ctx: Context<Initialize>) -> Result<()> {
         Ok(())
     }
@@ -142,7 +148,7 @@ pub mod anchor_solhedge {
         max_fair_price: u64,
         num_lots_to_buy: u64,
         initial_funding: u64
-    ) -> Result<u64> {
+    ) -> Result<TakerBuyLotsPutOptionReturn> {
 
         // Must pass PutOptionMakerInfo and corresponding quote asset ATAs (to receive premium) of potential sellers
         // in remaining accounts
@@ -362,7 +368,11 @@ pub mod anchor_solhedge {
                 ctx.accounts.put_option_taker_info.qty_deposited = ctx.accounts.put_option_taker_info.qty_deposited.checked_add(base_asset_transfer_qty).unwrap();
             }    
         }
-        Ok(total_lots_bought)
+        let result = TakerBuyLotsPutOptionReturn {
+            num_lots_bought: total_lots_bought,
+            price: ctx.accounts.vault_factory_info.last_fair_price
+        };
+        Ok(result)
     }
 
     pub fn maker_adjust_position_put_option_vault(ctx: Context<MakerAdjustPositionPutOptionVault>,     
