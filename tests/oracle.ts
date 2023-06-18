@@ -1,6 +1,6 @@
 import * as anchor from "@coral-xyz/anchor";
 import { AnchorSolhedge } from "../target/types/anchor_solhedge";
-import { getUserTicketAccountAddressForVaultFactory } from "./accounts";
+import { getUserSettleTicketAccountAddressForVaultFactory, getUserTicketAccountAddressForVaultFactory } from "./accounts";
 import axios from 'axios'
 import { cdfStdNormal, convertInterest, volatilitySquared } from "./stats";
 import * as token from "@solana/spl-token"
@@ -49,6 +49,52 @@ export const getOraclePubKey = (): anchor.web3.PublicKey => {
     const secretKey = Uint8Array.from(ORACLE_KEY)
     const keypair = anchor.web3.Keypair.fromSecretKey(secretKey)
     return keypair.publicKey
+}
+
+export const updatePutOptionSettlePrice = async (
+    program: anchor.Program<AnchorSolhedge>,
+    vaultFactoryInfo: anchor.web3.PublicKey,
+    user: anchor.web3.PublicKey
+): Promise<string> => {
+    const settleTicketAddress = await getUserSettleTicketAccountAddressForVaultFactory(program, vaultFactoryInfo, user)
+    const ticketAccount = await program.account.putOptionSettlePriceTicketInfo.fetch(settleTicketAddress)
+    if (ticketAccount == undefined || ticketAccount.isUsed) {
+        throw new Error("Unexistent or used ticket")
+    }
+    const vaultFactoryAccount = await program.account.putOptionVaultFactoryInfo.fetch(vaultFactoryInfo)
+    if (!supportedAssets.isSupported(vaultFactoryAccount.baseAsset, vaultFactoryAccount.quoteAsset)) {
+        throw new Error('The pair of (base asset, quote asset) in this vault factory is not supported by the Oracle')
+    }
+    const epochInSeconds = Math.floor(Date.now() / 1000);
+    const maturity = vaultFactoryAccount.maturity.toNumber()
+    if (maturity >= epochInSeconds) {
+        throw new Error('This put option has not yet reached maturity')
+    }
+    if (epochInSeconds - maturity < 60) {
+        throw new Error('Please wait at least 1 minute after maturity to settle option')
+    }
+    let maturityMinute = maturity - (maturity % 60)
+    let candles = await getCandlesticksBetween(vaultFactoryAccount.baseAsset.toString(), maturityMinute - 60, maturityMinute-1, CandleGranularity.ONE_MIN)
+    if (candles.length != 1) {
+        throw new Error(`Expected 1 candle, got ${candles.length}`)
+    }
+    let settlePrice = candles[0]["close"]
+    if (settlePrice == undefined || settlePrice <= 0) {
+        throw new Error(`Invalid settle price: ${settlePrice}`)
+    }
+    const d = new Date(0)
+    d.setUTCSeconds(maturity)
+    const conn = program.provider.connection
+    const mintQuoteAsset = await token.getMint(conn, vaultFactoryAccount.quoteAsset)
+    console.log(`The price at maturity (${d.toUTCString()}) was ${settlePrice/(10**(mintQuoteAsset.decimals))} dollars`)
+    const oracleKeyPair = anchor.web3.Keypair.fromSecretKey(Uint8Array.from(ORACLE_KEY))
+    let tx = program.methods.oracleUpdateSettlePrice(new anchor.BN(settlePrice)).accounts({
+        vaultFactoryInfo: vaultFactoryInfo,
+        updateTicket: settleTicketAddress,
+        ticketOwner: user,
+        initializer: oracleKeyPair.publicKey
+    }).signers([oracleKeyPair]).rpc()
+    return tx
 }
 
 export const updatePutOptionFairPrice = async (
@@ -203,6 +249,44 @@ async function tokenLastMinuteCandle(mint: string) {
         }
     });
     return result
+}
+
+async function getCandlesticksBetween(mint: string, startTimeEpoch: number, endTimeEpoch: number, granularity: CandleGranularity) {
+    const endpoint = "/v0/token/candlesticks"
+    let postData = {
+        "startTime": {
+            "operator": "between",
+            "greaterThan": startTimeEpoch,
+            "lessThan": endTimeEpoch
+        },
+        "granularity": granularity.toString(),
+        "mint": mint
+    }
+    let result = await axiosInstance.post(
+        endpoint,
+        postData
+    ) 
+    var helloCandles = result.data.data
+    while(result.data.paginationToken) {
+        postData["paginationToken"] = result.data.paginationToken
+        let newResult = await axiosInstance.post(endpoint, postData)
+        helloCandles = helloCandles.concat(newResult.data.data)
+        result = newResult
+    }
+
+
+    // assure that we do not have duplicates, just in case...
+    type CandlesByStartTime = {
+        [startTime: number]: any;
+    }
+    const candlesByStartTime: CandlesByStartTime = {};
+    helloCandles.forEach(candle => {
+        candlesByStartTime[candle.startTime] = candle
+    });
+    const returnedResult = Object.values(candlesByStartTime)
+
+    return returnedResult
+
 }
 
 async function getCandlesticksFrom(mint: string, startTimeEpoch: number, granularity: CandleGranularity) {

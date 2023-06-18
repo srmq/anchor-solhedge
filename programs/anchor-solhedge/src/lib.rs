@@ -60,7 +60,6 @@ pub mod anchor_solhedge {
         Ok(())
     }
 
-// FIXME TODO: implement oracle side in oracle.ts
     pub fn oracle_update_settle_price(
         ctx: Context<OracleUpdateSettlePrice>,
         settle_price: u64
