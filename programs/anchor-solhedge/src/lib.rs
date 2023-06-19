@@ -258,6 +258,11 @@ pub mod anchor_solhedge {
             ctx.accounts.put_option_taker_info.qty_deposited = new_funding;
             ctx.accounts.vault_info.takers_total_deposited = ctx.accounts.vault_info.takers_total_deposited.checked_sub(decrease_amount).unwrap();
         }
+
+        require!(
+            ctx.accounts.put_option_taker_info.qty_deposited <= ctx.accounts.put_option_taker_info.max_base_asset,
+            PutOptionError::IllegalState
+        );
         
         Ok(final_funding)
     }
@@ -488,6 +493,13 @@ pub mod anchor_solhedge {
                 ctx.accounts.put_option_taker_info.qty_deposited = ctx.accounts.put_option_taker_info.qty_deposited.checked_add(base_asset_transfer_qty).unwrap();
             }    
         }
+
+        require!(
+            ctx.accounts.put_option_taker_info.qty_deposited <= ctx.accounts.put_option_taker_info.max_base_asset,
+            PutOptionError::IllegalState
+        );
+
+
         let result = TakerBuyLotsPutOptionReturn {
             num_lots_bought: total_lots_bought,
             price: ctx.accounts.vault_factory_info.last_fair_price,
@@ -591,7 +603,14 @@ pub mod anchor_solhedge {
     
         }
 
-        ctx.accounts.put_option_maker_info.premium_limit = premium_limit;        
+        ctx.accounts.put_option_maker_info.premium_limit = premium_limit;    
+
+        require!(
+            ctx.accounts.put_option_maker_info.quote_asset_qty >= ctx.accounts.put_option_maker_info.volume_sold,
+            PutOptionError::IllegalState
+        );
+
+
         Ok(())
 
     }
@@ -1377,23 +1396,23 @@ pub struct PutOptionVaultInfo {
     lot_size: i8, //10^lot_size, for instance 0 means 1; -1 means 0.1; 2 means 100
 
     makers_num: u16,
-    makers_total_pending_sell: u64,
-    makers_total_pending_settle: u64,
+    makers_total_pending_sell: u64,     // the amount of quote asset lamports that makers have deposited, but not yet sold
+    makers_total_pending_settle: u64,   // the amount of quote asset lamports that has been sold in options and has not been settled
     is_makers_full: bool,
 
     takers_num: u16,
-    takers_total_deposited: u64,
+    takers_total_deposited: u64,        // the amount that takers have funded
     is_takers_full: bool
 }
 
 #[account]
 pub struct PutOptionMakerInfo {
     ord: u16,
-    quote_asset_qty: u64,
-    volume_sold: u64,
-    is_all_sold: bool,
-    is_settled: bool,
-    premium_limit: u64,
+    quote_asset_qty: u64,       // total in quote asset lamports that has been deposited by the maker
+    volume_sold: u64,           // amount of quote asset lamports that has been sold in options by this maker (volume_sold <= quote_asset_qty)
+    is_all_sold: bool,          // if the available volume (quote_asset_qty - volume_sold) is worth less than 1 lot, all is sold
+    is_settled: bool,           // if the maker has already got his tokens after maturity
+    premium_limit: u64,         // minimum price for option premium he is willing to get, can be zero if he is ok of selling at whatever the fair price
     owner: Pubkey,
     put_option_vault: Pubkey
 }
@@ -1423,9 +1442,9 @@ pub struct PutOptionTakerInfo {
     is_initialized: bool,
 
     ord: u16,
-    max_base_asset: u64,
-    qty_deposited: u64,
-    is_settled: bool,
+    max_base_asset: u64,        // the max amount in base asset lamports she may fund based on how many options she bought
+    qty_deposited: u64,         // how much she has funded (qty_deposited <= max_base_asset)
+    is_settled: bool,           // if the taker has already got her tokens after maturity
     owner: Pubkey,
     put_option_vault: Pubkey
 }
