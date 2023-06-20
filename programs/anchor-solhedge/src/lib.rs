@@ -56,6 +56,21 @@ pub mod anchor_solhedge {
         pub funding_added: u64
     }
 
+    #[derive(AnchorSerialize, AnchorDeserialize)]
+    pub struct PutOptionSettleReturn {
+        pub settle_result: PutOptionSettleResult,
+        pub base_asset_transfer: u64,
+        pub quote_asset_transfer: u64
+    }
+    
+
+    #[derive(AnchorSerialize, AnchorDeserialize, Clone)]
+    pub enum PutOptionSettleResult {
+        NotExercised,
+        FullyExercised,
+        PartiallyExercised
+    }
+
     pub fn initialize(_ctx: Context<Initialize>) -> Result<()> {
         Ok(())
     }
@@ -195,9 +210,226 @@ pub mod anchor_solhedge {
         Ok(result)
     }
 
-    pub fn taker_settle_put_option(ctx: Context<TakerSettlePutOption>) -> Result<()> {
-        //FIXME TODO
-        Ok(())
+    pub fn maker_settle_put_option(ctx: Context<MakerSettlePutOption>) -> Result<PutOptionSettleReturn> {
+        let current_time = Clock::get().unwrap().unix_timestamp as u64;
+        require!(
+            ctx.accounts.vault_factory_info.maturity < current_time,
+            PutOptionError::IllegalState  // should not have passed maturity test, must never happen
+        );
+
+
+        let mut result = PutOptionSettleReturn {
+            base_asset_transfer: 0,
+            quote_asset_transfer: 0,
+            settle_result: PutOptionSettleResult::NotExercised
+        };
+
+        if ctx.accounts.vault_factory_info.settled_price > ctx.accounts.vault_factory_info.strike {
+            // put option is not favorable to taker, will NOT be exercised
+            // i.e. maker gets her deposited quote assets back
+            result.settle_result = PutOptionSettleResult::NotExercised;
+            // Proceed to transfer 
+            let cpi_program = ctx.accounts.token_program.to_account_info();
+            let cpi_accounts = Transfer {
+                from: ctx.accounts.vault_quote_asset_treasury.to_account_info(),
+                to: ctx.accounts.maker_quote_asset_account.to_account_info(),
+                authority: ctx.accounts.vault_info.to_account_info(),
+            };
+
+            // Preparing PDA signer
+            let auth_bump = *ctx.bumps.get("vault_info").unwrap();
+            let seeds = &[
+                "PutOptionVaultInfo".as_bytes().as_ref(), 
+                &ctx.accounts.vault_factory_info.key().to_bytes(),
+                &ctx.accounts.vault_info.ord.to_le_bytes(),
+                &[auth_bump],
+            ];
+            let signer = &[&seeds[..]];
+    
+
+            let token_transfer_context = CpiContext::new_with_signer(cpi_program, cpi_accounts, signer);
+
+            token::transfer(token_transfer_context, ctx.accounts.put_option_maker_info.quote_asset_qty)?;
+
+            result.quote_asset_transfer = ctx.accounts.put_option_maker_info.quote_asset_qty;
+            result.base_asset_transfer = 0;
+        } else {
+            // put option is favorable to taker, WILL be exercised
+            // maker will sell up to the limit of ctx.accounts.put_option_maker_info.volume_sold
+            // however as takers may have insufficiently funded their options, the maker
+            // may eventually sell less, in a first settle first served base
+
+            let total_deposited_quote_lamports_value_f64 = (ctx.accounts.vault_info.takers_total_deposited as f64) / 10.0f64.powf(ctx.accounts.base_asset_mint.decimals as f64) * (ctx.accounts.vault_factory_info.strike as f64);
+            require!(
+                total_deposited_quote_lamports_value_f64.is_finite(),
+                PutOptionError::Overflow
+            );
+            let total_deposited_quote_lamports_value = total_deposited_quote_lamports_value_f64.floor() as u64;
+            let total_bonus = ctx.accounts.vault_info.makers_total_pending_settle - total_deposited_quote_lamports_value;
+            let max_bonus = total_bonus.checked_sub(ctx.accounts.vault_info.bonus_not_exercised).unwrap();
+
+            let maker_bonus = std::cmp::min(max_bonus, ctx.accounts.put_option_maker_info.volume_sold);
+            let maker_buy_amount = ctx.accounts.put_option_maker_info.volume_sold.checked_sub(maker_bonus).unwrap();
+            let mut transfer_quote_asset = ctx.accounts.put_option_maker_info.quote_asset_qty.checked_sub(ctx.accounts.put_option_maker_info.volume_sold).unwrap(); // initially unsold quote assets
+            if maker_bonus > 0 {
+                transfer_quote_asset = transfer_quote_asset.checked_add(maker_bonus).unwrap();
+                ctx.accounts.vault_info.bonus_not_exercised = ctx.accounts.vault_info.bonus_not_exercised.checked_add(maker_bonus).unwrap();
+            }
+            if transfer_quote_asset > 0 {
+                result.settle_result = PutOptionSettleResult::PartiallyExercised;
+                // Proceed to transfer 
+                let cpi_program = ctx.accounts.token_program.to_account_info();
+                let cpi_accounts = Transfer {
+                    from: ctx.accounts.vault_quote_asset_treasury.to_account_info(),
+                    to: ctx.accounts.maker_quote_asset_account.to_account_info(),
+                    authority: ctx.accounts.vault_info.to_account_info(),
+                };
+
+                // Preparing PDA signer
+                let auth_bump = *ctx.bumps.get("vault_info").unwrap();
+                let seeds = &[
+                    "PutOptionVaultInfo".as_bytes().as_ref(), 
+                    &ctx.accounts.vault_factory_info.key().to_bytes(),
+                    &ctx.accounts.vault_info.ord.to_le_bytes(),
+                    &[auth_bump],
+                ];
+                let signer = &[&seeds[..]];
+        
+
+                let token_transfer_context = CpiContext::new_with_signer(cpi_program, cpi_accounts, signer);
+
+                token::transfer(token_transfer_context, transfer_quote_asset)?;
+                result.quote_asset_transfer = transfer_quote_asset;
+            } else {
+                result.settle_result = PutOptionSettleResult::FullyExercised;
+                result.quote_asset_transfer = 0;
+            }
+            if maker_buy_amount > 0 {
+                let base_lamports_f64 = (maker_buy_amount as f64) / (ctx.accounts.vault_factory_info.strike as f64) * 10.0f64.powf(ctx.accounts.base_asset_mint.decimals as f64);
+                require!(
+                    base_lamports_f64.is_finite(),
+                    PutOptionError::Overflow
+                );
+                let base_lamports = base_lamports_f64.floor() as u64;
+                let cpi_program = ctx.accounts.token_program.to_account_info();
+                let cpi_accounts = Transfer {
+                    from: ctx.accounts.vault_base_asset_treasury.to_account_info(),
+                    to: ctx.accounts.maker_base_asset_account.to_account_info(),
+                    authority: ctx.accounts.vault_info.to_account_info(),
+                };
+    
+                // Preparing PDA signer
+                let auth_bump = *ctx.bumps.get("vault_info").unwrap();
+                let seeds = &[
+                    "PutOptionVaultInfo".as_bytes().as_ref(), 
+                    &ctx.accounts.vault_factory_info.key().to_bytes(),
+                    &ctx.accounts.vault_info.ord.to_le_bytes(),
+                    &[auth_bump],
+                ];
+                let signer = &[&seeds[..]];
+        
+    
+                let token_transfer_context = CpiContext::new_with_signer(cpi_program, cpi_accounts, signer);
+    
+                token::transfer(token_transfer_context, base_lamports)?;
+                result.base_asset_transfer = base_lamports;
+                    
+            }            
+        }
+
+        ctx.accounts.put_option_maker_info.quote_asset_qty = 0;
+        ctx.accounts.put_option_maker_info.volume_sold = 0;
+        ctx.accounts.put_option_maker_info.is_settled = true;
+
+        Ok(result)
+    }
+
+    pub fn taker_settle_put_option(ctx: Context<TakerSettlePutOption>) -> Result<PutOptionSettleReturn> {
+        let current_time = Clock::get().unwrap().unix_timestamp as u64;
+        require!(
+            ctx.accounts.vault_factory_info.maturity < current_time,
+            PutOptionError::IllegalState  // should not have passed maturity test, must never happen
+        );
+
+        let mut result = PutOptionSettleReturn {
+            base_asset_transfer: 0,
+            quote_asset_transfer: 0,
+            settle_result: PutOptionSettleResult::NotExercised
+        };
+
+
+        if ctx.accounts.vault_factory_info.settled_price > ctx.accounts.vault_factory_info.strike {
+            // put option is not favorable to taker, will NOT be exercised
+            // i.e. taker gets her deposited base assets back
+            result.settle_result = PutOptionSettleResult::NotExercised;
+            if ctx.accounts.put_option_taker_info.qty_deposited > 0 {
+                let cpi_program = ctx.accounts.token_program.to_account_info();
+                let cpi_accounts = Transfer {
+                    from: ctx.accounts.vault_base_asset_treasury.to_account_info(),
+                    to: ctx.accounts.taker_base_asset_account.to_account_info(),
+                    authority: ctx.accounts.vault_info.to_account_info(),
+                };
+    
+                // Preparing PDA signer
+                let auth_bump = *ctx.bumps.get("vault_info").unwrap();
+                let seeds = &[
+                    "PutOptionVaultInfo".as_bytes().as_ref(), 
+                    &ctx.accounts.vault_factory_info.key().to_bytes(),
+                    &ctx.accounts.vault_info.ord.to_le_bytes(),
+                    &[auth_bump],
+                ];
+                let signer = &[&seeds[..]];
+        
+    
+                let token_transfer_context = CpiContext::new_with_signer(cpi_program, cpi_accounts, signer);
+    
+                token::transfer(token_transfer_context, ctx.accounts.put_option_taker_info.qty_deposited)?;
+                result.base_asset_transfer = ctx.accounts.put_option_taker_info.qty_deposited;
+                result.quote_asset_transfer = 0;
+            }
+        } else {
+            // put option is favorable to taker, WILL be exercised
+            // i.e. sell qty_deposited at strike price
+            result.settle_result = PutOptionSettleResult::PartiallyExercised;
+            if ctx.accounts.put_option_taker_info.qty_deposited > 0 {
+                if ctx.accounts.put_option_taker_info.qty_deposited == ctx.accounts.put_option_taker_info.max_base_asset {
+                    result.settle_result = PutOptionSettleResult::FullyExercised;
+                }
+                let qty_deposited_quote_lamports_value_f64 = (ctx.accounts.put_option_taker_info.qty_deposited as f64) / 10.0f64.powf(ctx.accounts.base_asset_mint.decimals as f64) * (ctx.accounts.vault_factory_info.strike as f64);
+                require!(
+                    qty_deposited_quote_lamports_value_f64.is_finite(),
+                    PutOptionError::Overflow
+                );
+                let qty_deposited_quote_lamports_value = qty_deposited_quote_lamports_value_f64.floor() as u64;
+                let cpi_program = ctx.accounts.token_program.to_account_info();
+                let cpi_accounts = Transfer {
+                    from: ctx.accounts.vault_quote_asset_treasury.to_account_info(),
+                    to: ctx.accounts.taker_quote_asset_account.to_account_info(),
+                    authority: ctx.accounts.vault_info.to_account_info(),
+                };
+    
+                // Preparing PDA signer
+                let auth_bump = *ctx.bumps.get("vault_info").unwrap();
+                let seeds = &[
+                    "PutOptionVaultInfo".as_bytes().as_ref(), 
+                    &ctx.accounts.vault_factory_info.key().to_bytes(),
+                    &ctx.accounts.vault_info.ord.to_le_bytes(),
+                    &[auth_bump],
+                ];
+                let signer = &[&seeds[..]];
+        
+    
+                let token_transfer_context = CpiContext::new_with_signer(cpi_program, cpi_accounts, signer);
+    
+                token::transfer(token_transfer_context, qty_deposited_quote_lamports_value)?;
+                result.base_asset_transfer = 0;
+                result.quote_asset_transfer = qty_deposited_quote_lamports_value;
+            }
+        }
+        ctx.accounts.put_option_taker_info.qty_deposited = 0;
+        ctx.accounts.put_option_taker_info.is_settled = true;
+
+        Ok(result)
     }
 
     pub fn taker_adjust_funding_put_option_vault(ctx: Context<TakerAdjustFundingPutOptionVault>,
@@ -771,6 +1003,7 @@ pub mod anchor_solhedge {
         ctx.accounts.vault_info.takers_num = 0;
         ctx.accounts.vault_info.takers_total_deposited = 0;
         ctx.accounts.vault_info.is_takers_full = ctx.accounts.vault_info.takers_num >= ctx.accounts.vault_info.max_takers;
+        ctx.accounts.vault_info.bonus_not_exercised = 0;
         msg!("Finished initialization of PutOptionVaultInfo, now initializing PutOptionMakerInfo");
 
         // Now initializing info about this maker in the vault (PutOptionMakerInfo)
@@ -795,6 +1028,93 @@ pub mod anchor_solhedge {
 
 #[derive(Accounts)]
 pub struct Initialize {}
+
+#[derive(Accounts)]
+pub struct MakerSettlePutOption<'info> {
+    #[account(
+        constraint = vault_factory_info.strike > 0,
+        constraint = vault_factory_info.is_initialized == true,
+        constraint = vault_factory_info.matured == true,
+        constraint = vault_factory_info.settled_price > 0,
+        constraint = vault_factory_info.base_asset == base_asset_mint.key(),
+        constraint = vault_factory_info.quote_asset == quote_asset_mint.key(),
+
+    )]
+    pub vault_factory_info: Account<'info, PutOptionVaultFactoryInfo>,
+
+    #[account(
+        mut,
+        seeds=[
+            "PutOptionVaultInfo".as_bytes().as_ref(), 
+            vault_factory_info.key().as_ref(),
+            vault_info.ord.to_le_bytes().as_ref()
+        ], bump,
+        constraint = vault_info.factory_vault == vault_factory_info.key(),
+    )]
+    pub vault_info: Account<'info, PutOptionVaultInfo>,
+
+    #[account(
+        mut,
+        seeds=[
+            "PutOptionMakerInfo".as_bytes().as_ref(),
+            vault_factory_info.key().as_ref(),
+            vault_info.ord.to_le_bytes().as_ref(), 
+            initializer.key().as_ref()
+        ],
+        bump,
+        constraint = !put_option_maker_info.is_settled
+    )]
+    pub put_option_maker_info: Account<'info, PutOptionMakerInfo>,
+
+    // mint for the base_asset
+    pub base_asset_mint: Account<'info, Mint>,
+
+    // mint for the quote asset
+    pub quote_asset_mint: Account<'info, Mint>,
+
+    #[account(
+        mut,
+        constraint = vault_base_asset_treasury.mint == base_asset_mint.key(), // Base asset mint
+        constraint = vault_base_asset_treasury.owner.key() == vault_info.key() // Authority set to vault PDA
+    )]
+    pub vault_base_asset_treasury: Box<Account<'info, TokenAccount>>,
+
+    #[account(
+        mut,
+        constraint = vault_quote_asset_treasury.mint == quote_asset_mint.key(), // quote asset mint
+        constraint = vault_quote_asset_treasury.owner.key() == vault_info.key() // Authority set to vault PDA
+    )]
+    pub vault_quote_asset_treasury: Box<Account<'info, TokenAccount>>,
+
+
+    // if put option is exercised, maker will get the base tokens she bought at strike price at this account
+    #[account(
+        mut,
+        constraint = maker_base_asset_account.owner.key() == initializer.key(),
+        constraint = maker_base_asset_account.mint == base_asset_mint.key()
+    )]
+    pub maker_base_asset_account: Box<Account<'info, TokenAccount>>,
+
+    // if put option is not exercised, maker will get her quote tokens back at this account
+    #[account(
+        mut,
+        constraint = maker_quote_asset_account.owner.key() == initializer.key(),
+        constraint = maker_quote_asset_account.mint == quote_asset_mint.key()
+    )]
+    pub maker_quote_asset_account: Box<Account<'info, TokenAccount>>,
+
+
+    // Check if initializer is signer, mut is required to reduce lamports (fees)
+    #[account(mut)]
+    pub initializer: Signer<'info>,
+    
+    // System Program requred for deduction of lamports (fees)
+    pub system_program: Program<'info, System>,
+    // Token Program required to call transfer instruction
+    pub token_program: Program<'info, Token>,
+    pub associated_token_program: Program<'info, AssociatedToken>
+}
+
 
 #[derive(Accounts)]
 pub struct TakerSettlePutOption<'info> {
@@ -862,7 +1182,7 @@ pub struct TakerSettlePutOption<'info> {
     )]
     pub taker_base_asset_account: Box<Account<'info, TokenAccount>>,
 
-    // if put option is not exercised, taker will get her base tokens back at this account
+    // if put option is exercised, taker will get her quote tokens at this account
     #[account(
         mut,
         constraint = taker_quote_asset_account.owner.key() == initializer.key(),
@@ -1493,7 +1813,9 @@ pub struct PutOptionVaultInfo {
 
     takers_num: u16,
     takers_total_deposited: u64,        // the amount that takers have funded
-    is_takers_full: bool
+    is_takers_full: bool,
+    bonus_not_exercised: u64            // the amount of bonus that has been given to early settlers (makers) when the option was exercised
+                                        // but the takers have not fully funded what they had bought.
 }
 
 #[account]

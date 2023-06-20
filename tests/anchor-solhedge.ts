@@ -204,7 +204,7 @@ describe("anchor-solhedge", () => {
     let currEpoch = Math.floor(Date.now()/1000)
     let oneWeek = currEpoch + (7*24*60*60)
 
-    let strikeInDollars = 25000
+    let strikeInDollars = 26000
 
     let lamportPrice = strikeInDollars * (10 ** mintInfoUSDC.decimals)
     console.log(`Lamport price for ${strikeInDollars} is ${lamportPrice}`)
