@@ -31,9 +31,17 @@ const LAMPORTS_FOR_UPDATE_SETTLEPRICE_TICKET: u64 = 500000;
 
 const MAX_SECONDS_FROM_LAST_FAIR_PRICE_UPDATE: u64 = 60;
 
-//At this moment we will create options for at most
-//30 days in the future
+// At this moment we will create options for at most
+// 30 days in the future
 const MAX_MATURITY_FUTURE_SECONDS: u64 = 30*24*60*60;
+
+// If 15 days have passed after vault factory matured
+// and the oracle has not updated settled price, we
+// may assume that the whole world outside the blockchain
+// has collapsed and we will let makers and takers take
+// back their deposited assets, like if the option
+// has not been exercised
+const EMERGENCY_MODE_GRACE_PERIOD: u64 = 15*24*60*60;
 
 // The corresponding private key is public on oracle.ts and on github! MUST CHANGE ON REAL DEPLOYMENT!
 const ORACLE_ADDRESS: Pubkey = pubkey!("9SBVhfXD73uNe9hQRLBBmzgY7PZUTQYGaa6aPM7Gqo68");
@@ -200,6 +208,7 @@ pub mod anchor_solhedge {
             ctx.accounts.vault_factory_info.strike = params.strike;
             ctx.accounts.vault_factory_info.base_asset = ctx.accounts.base_asset_mint.key();
             ctx.accounts.vault_factory_info.quote_asset = ctx.accounts.quote_asset_mint.key();
+            ctx.accounts.vault_factory_info.emergency_mode = false;
 
             ctx.accounts.vault_factory_info.is_initialized = true;
             msg!("PutOptionVaultFactoryInfo initialized");
@@ -209,6 +218,92 @@ pub mod anchor_solhedge {
 
         Ok(result)
     }
+
+    pub fn maker_activate_put_option_emergency_mode(ctx: Context<MakerActivatePutOptionEmergencyMode>) -> Result<()> {
+        let current_time = Clock::get().unwrap().unix_timestamp as u64;
+        require!(
+            current_time.checked_sub(ctx.accounts.vault_factory_info.maturity).unwrap() > EMERGENCY_MODE_GRACE_PERIOD,
+            PutOptionError::EmergencyModeTooEarly
+        );
+        
+        ctx.accounts.vault_factory_info.emergency_mode = true;
+
+        Ok(())
+    }
+
+    pub fn taker_put_option_emergency_exit(ctx: Context<TakerPutOptionEmergencyExit>) -> Result<()> {
+        if ctx.accounts.put_option_taker_info.qty_deposited > 0 {
+            let cpi_program = ctx.accounts.token_program.to_account_info();
+            let cpi_accounts = Transfer {
+                from: ctx.accounts.vault_base_asset_treasury.to_account_info(),
+                to: ctx.accounts.taker_base_asset_account.to_account_info(),
+                authority: ctx.accounts.vault_info.to_account_info(),
+            };
+
+            // Preparing PDA signer
+            let auth_bump = *ctx.bumps.get("vault_info").unwrap();
+            let seeds = &[
+                "PutOptionVaultInfo".as_bytes().as_ref(), 
+                &ctx.accounts.vault_factory_info.key().to_bytes(),
+                &ctx.accounts.vault_info.ord.to_le_bytes(),
+                &[auth_bump],
+            ];
+            let signer = &[&seeds[..]];
+    
+
+            let token_transfer_context = CpiContext::new_with_signer(cpi_program, cpi_accounts, signer);
+
+            token::transfer(token_transfer_context, ctx.accounts.put_option_taker_info.qty_deposited)?;
+        }
+        ctx.accounts.put_option_taker_info.qty_deposited = 0;
+        ctx.accounts.put_option_taker_info.is_settled = true;
+
+        Ok(())
+    }    
+
+    pub fn maker_put_option_emergency_exit(ctx: Context<MakerPutOptionEmergencyExit>) -> Result<()> {
+        let cpi_program = ctx.accounts.token_program.to_account_info();
+        let cpi_accounts = Transfer {
+            from: ctx.accounts.vault_quote_asset_treasury.to_account_info(),
+            to: ctx.accounts.maker_quote_asset_account.to_account_info(),
+            authority: ctx.accounts.vault_info.to_account_info(),
+        };
+
+        // Preparing PDA signer
+        let auth_bump = *ctx.bumps.get("vault_info").unwrap();
+        let seeds = &[
+            "PutOptionVaultInfo".as_bytes().as_ref(), 
+            &ctx.accounts.vault_factory_info.key().to_bytes(),
+            &ctx.accounts.vault_info.ord.to_le_bytes(),
+            &[auth_bump],
+        ];
+        let signer = &[&seeds[..]];
+
+
+        let token_transfer_context = CpiContext::new_with_signer(cpi_program, cpi_accounts, signer);
+
+        token::transfer(token_transfer_context, ctx.accounts.put_option_maker_info.quote_asset_qty)?;
+
+        ctx.accounts.put_option_maker_info.quote_asset_qty = 0;
+        ctx.accounts.put_option_maker_info.volume_sold = 0;
+        ctx.accounts.put_option_maker_info.is_settled = true;
+
+
+        Ok(())
+    }
+
+    pub fn taker_activate_put_option_emergency_mode(ctx: Context<TakerActivatePutOptionEmergencyMode>) -> Result<()> {
+        let current_time = Clock::get().unwrap().unix_timestamp as u64;
+        require!(
+            current_time.checked_sub(ctx.accounts.vault_factory_info.maturity).unwrap() > EMERGENCY_MODE_GRACE_PERIOD,
+            PutOptionError::EmergencyModeTooEarly
+        );
+        
+        ctx.accounts.vault_factory_info.emergency_mode = true;
+
+        Ok(())
+    }
+
 
     pub fn maker_settle_put_option(ctx: Context<MakerSettlePutOption>) -> Result<PutOptionSettleReturn> {
         let current_time = Clock::get().unwrap().unix_timestamp as u64;
@@ -1030,6 +1125,92 @@ pub mod anchor_solhedge {
 pub struct Initialize {}
 
 #[derive(Accounts)]
+pub struct TakerActivatePutOptionEmergencyMode<'info> {
+    #[account(
+        mut,
+        constraint = vault_factory_info.strike > 0,
+        constraint = vault_factory_info.is_initialized == true,
+        constraint = vault_factory_info.matured == false,
+        constraint = vault_factory_info.emergency_mode == false
+    )]
+    pub vault_factory_info: Account<'info, PutOptionVaultFactoryInfo>,
+
+    #[account(
+        seeds=[
+            "PutOptionVaultInfo".as_bytes().as_ref(), 
+            vault_factory_info.key().as_ref(),
+            vault_info.ord.to_le_bytes().as_ref()
+        ], bump,
+        constraint = vault_info.factory_vault == vault_factory_info.key(),
+    )]
+    pub vault_info: Account<'info, PutOptionVaultInfo>,
+
+    #[account(
+        seeds=[
+            "PutOptionTakerInfo".as_bytes().as_ref(),
+            vault_factory_info.key().as_ref(),
+            vault_info.ord.to_le_bytes().as_ref(), 
+            initializer.key().as_ref()
+        ],
+        bump,
+        constraint = !put_option_taker_info.is_settled
+    )]
+    pub put_option_taker_info: Account<'info, PutOptionTakerInfo>,
+
+
+    // Check if initializer is signer, mut is required to reduce lamports (fees)
+    #[account(mut)]
+    pub initializer: Signer<'info>,
+    
+    // System Program requred for deduction of lamports (fees)
+    pub system_program: Program<'info, System>,
+
+}
+
+
+#[derive(Accounts)]
+pub struct MakerActivatePutOptionEmergencyMode<'info> {
+    #[account(
+        mut,
+        constraint = vault_factory_info.strike > 0,
+        constraint = vault_factory_info.is_initialized == true,
+        constraint = vault_factory_info.matured == false,
+        constraint = vault_factory_info.emergency_mode == false
+    )]
+    pub vault_factory_info: Account<'info, PutOptionVaultFactoryInfo>,
+
+    #[account(
+        seeds=[
+            "PutOptionVaultInfo".as_bytes().as_ref(), 
+            vault_factory_info.key().as_ref(),
+            vault_info.ord.to_le_bytes().as_ref()
+        ], bump,
+        constraint = vault_info.factory_vault == vault_factory_info.key(),
+    )]
+    pub vault_info: Account<'info, PutOptionVaultInfo>,
+
+    #[account(
+        seeds=[
+            "PutOptionMakerInfo".as_bytes().as_ref(),
+            vault_factory_info.key().as_ref(),
+            vault_info.ord.to_le_bytes().as_ref(), 
+            initializer.key().as_ref()
+        ],
+        bump,
+        constraint = !put_option_maker_info.is_settled
+    )]
+    pub put_option_maker_info: Account<'info, PutOptionMakerInfo>,
+
+    // Check if initializer is signer, mut is required to reduce lamports (fees)
+    #[account(mut)]
+    pub initializer: Signer<'info>,
+    
+    // System Program requred for deduction of lamports (fees)
+    pub system_program: Program<'info, System>,
+
+}
+
+#[derive(Accounts)]
 pub struct MakerSettlePutOption<'info> {
     #[account(
         constraint = vault_factory_info.strike > 0,
@@ -1038,7 +1219,7 @@ pub struct MakerSettlePutOption<'info> {
         constraint = vault_factory_info.settled_price > 0,
         constraint = vault_factory_info.base_asset == base_asset_mint.key(),
         constraint = vault_factory_info.quote_asset == quote_asset_mint.key(),
-
+        constraint = vault_factory_info.emergency_mode == false
     )]
     pub vault_factory_info: Account<'info, PutOptionVaultFactoryInfo>,
 
@@ -1125,7 +1306,7 @@ pub struct TakerSettlePutOption<'info> {
         constraint = vault_factory_info.settled_price > 0,
         constraint = vault_factory_info.base_asset == base_asset_mint.key(),
         constraint = vault_factory_info.quote_asset == quote_asset_mint.key(),
-
+        constraint = vault_factory_info.emergency_mode == false
     )]
     pub vault_factory_info: Account<'info, PutOptionVaultFactoryInfo>,
 
@@ -1213,7 +1394,7 @@ pub struct TakerAdjustFundingPutOptionVault<'info> {
         constraint = vault_factory_info.matured == false,
         constraint = vault_factory_info.base_asset == base_asset_mint.key(),
         constraint = vault_factory_info.quote_asset == quote_asset_mint.key(),
-
+        constraint = vault_factory_info.emergency_mode == false
     )]
     pub vault_factory_info: Account<'info, PutOptionVaultFactoryInfo>,
 
@@ -1286,7 +1467,7 @@ pub struct TakerBuyLotsPutOptionVault<'info> {
         constraint = vault_factory_info.matured == false,
         constraint = vault_factory_info.base_asset == base_asset_mint.key(),
         constraint = vault_factory_info.quote_asset == quote_asset_mint.key(),
-
+        constraint = vault_factory_info.emergency_mode == false
     )]
     pub vault_factory_info: Account<'info, PutOptionVaultFactoryInfo>,
 
@@ -1382,6 +1563,7 @@ pub struct OracleUpdateSettlePrice<'info> {
         mut,
         constraint = vault_factory_info.strike > 0,
         constraint = vault_factory_info.is_initialized == true,
+        constraint = vault_factory_info.emergency_mode == false
     )]
     pub vault_factory_info: Account<'info, PutOptionVaultFactoryInfo>,
 
@@ -1422,6 +1604,7 @@ pub struct OracleUpdateFairPrice<'info> {
         mut,
         constraint = vault_factory_info.strike > 0,
         constraint = vault_factory_info.is_initialized == true,
+        constraint = vault_factory_info.emergency_mode == false
     )]
     pub vault_factory_info: Account<'info, PutOptionVaultFactoryInfo>,
 
@@ -1456,7 +1639,8 @@ pub struct GenSettlePutOptionPriceTicket<'info> {
     #[account(
         constraint = vault_factory_info.strike > 0,
         constraint = vault_factory_info.matured == false,
-        constraint = vault_factory_info.is_initialized == true
+        constraint = vault_factory_info.is_initialized == true,
+        constraint = vault_factory_info.emergency_mode == false
     )]
     pub vault_factory_info: Account<'info, PutOptionVaultFactoryInfo>,
 
@@ -1490,6 +1674,7 @@ pub struct GenUpdatePutOptionFairPriceTicket<'info> {
         constraint = vault_factory_info.strike > 0,
         constraint = vault_factory_info.matured == false,
         constraint = vault_factory_info.is_initialized == true,
+        constraint = vault_factory_info.emergency_mode == false
     )]
     pub vault_factory_info: Account<'info, PutOptionVaultFactoryInfo>,
 
@@ -1558,7 +1743,7 @@ pub struct MakerAdjustPositionPutOptionVault<'info> {
         constraint = vault_factory_info.matured == false,
         constraint = vault_factory_info.base_asset == base_asset_mint.key(),
         constraint = vault_factory_info.quote_asset == quote_asset_mint.key(),
-
+        constraint = vault_factory_info.emergency_mode == false
     )]
     pub vault_factory_info: Account<'info, PutOptionVaultFactoryInfo>,
 
@@ -1632,7 +1817,7 @@ pub struct MakerEnterPutOptionVault<'info> {
         constraint = vault_factory_info.matured == false,
         constraint = vault_factory_info.base_asset == base_asset_mint.key(),
         constraint = vault_factory_info.quote_asset == quote_asset_mint.key(),
-
+        constraint = vault_factory_info.emergency_mode == false
     )]
     pub vault_factory_info: Account<'info, PutOptionVaultFactoryInfo>,
 
@@ -1696,6 +1881,132 @@ pub struct MakerEnterPutOptionVault<'info> {
 }
 
 #[derive(Accounts)]
+pub struct TakerPutOptionEmergencyExit<'info> {
+
+    #[account(
+        constraint = vault_factory_info.strike > 0,
+        constraint = vault_factory_info.is_initialized == true,
+        constraint = vault_factory_info.matured == false,
+        constraint = vault_factory_info.base_asset == base_asset_mint.key(),
+        constraint = vault_factory_info.emergency_mode == true
+    )]
+    pub vault_factory_info: Account<'info, PutOptionVaultFactoryInfo>,
+
+    #[account(
+        seeds=[
+            "PutOptionVaultInfo".as_bytes().as_ref(), 
+            vault_factory_info.key().as_ref(),
+            vault_info.ord.to_le_bytes().as_ref()
+        ], bump,
+        constraint = vault_info.factory_vault == vault_factory_info.key(),
+    )]
+    pub vault_info: Account<'info, PutOptionVaultInfo>,
+
+    #[account(
+        mut,
+        seeds=[
+            "PutOptionTakerInfo".as_bytes().as_ref(),
+            vault_factory_info.key().as_ref(),
+            vault_info.ord.to_le_bytes().as_ref(), 
+            initializer.key().as_ref()
+        ],
+        bump,
+        constraint = !put_option_taker_info.is_settled
+    )]
+    pub put_option_taker_info: Account<'info, PutOptionTakerInfo>,
+
+    // mint for the base_asset
+    pub base_asset_mint: Account<'info, Mint>,
+
+    #[account(
+        mut,
+        constraint = vault_base_asset_treasury.mint == base_asset_mint.key(), // Base asset mint
+        constraint = vault_base_asset_treasury.owner.key() == vault_info.key() // Authority set to vault PDA
+    )]
+    pub vault_base_asset_treasury: Box<Account<'info, TokenAccount>>,
+
+    #[account(
+        mut,
+        constraint = taker_base_asset_account.owner.key() == initializer.key(),
+        constraint = taker_base_asset_account.mint == base_asset_mint.key()
+    )]
+    pub taker_base_asset_account: Box<Account<'info, TokenAccount>>,
+
+    // Check if initializer is signer, mut is required to reduce lamports (fees)
+    #[account(mut)]
+    pub initializer: Signer<'info>,
+    
+    // System Program requred for deduction of lamports (fees)
+    pub system_program: Program<'info, System>,
+    // Token Program required to call transfer instruction
+    pub token_program: Program<'info, Token>,
+    pub associated_token_program: Program<'info, AssociatedToken>
+
+}
+
+#[derive(Accounts)]
+pub struct MakerPutOptionEmergencyExit<'info> {
+    #[account(
+        constraint = vault_factory_info.strike > 0,
+        constraint = vault_factory_info.is_initialized == true,
+        constraint = vault_factory_info.matured == false,
+        constraint = vault_factory_info.quote_asset == quote_asset_mint.key(),
+        constraint = vault_factory_info.emergency_mode == true
+    )]
+    pub vault_factory_info: Account<'info, PutOptionVaultFactoryInfo>,
+
+    #[account(
+        seeds=[
+            "PutOptionVaultInfo".as_bytes().as_ref(), 
+            vault_factory_info.key().as_ref(),
+            vault_info.ord.to_le_bytes().as_ref()
+        ], bump,
+        constraint = vault_info.factory_vault == vault_factory_info.key(),
+    )]
+    pub vault_info: Account<'info, PutOptionVaultInfo>,
+
+    #[account(
+        mut,
+        seeds=[
+            "PutOptionMakerInfo".as_bytes().as_ref(),
+            vault_factory_info.key().as_ref(),
+            vault_info.ord.to_le_bytes().as_ref(), 
+            initializer.key().as_ref()
+        ],
+        bump,
+        constraint = !put_option_maker_info.is_settled
+    )]
+    pub put_option_maker_info: Account<'info, PutOptionMakerInfo>,
+
+    // mint for the quote asset
+    pub quote_asset_mint: Account<'info, Mint>,
+
+    #[account(
+        mut,
+        constraint = vault_quote_asset_treasury.mint == quote_asset_mint.key(), // quote asset mint
+        constraint = vault_quote_asset_treasury.owner.key() == vault_info.key() // Authority set to vault PDA
+    )]
+    pub vault_quote_asset_treasury: Box<Account<'info, TokenAccount>>,
+
+    #[account(
+        mut,
+        constraint = maker_quote_asset_account.owner.key() == initializer.key(),
+        constraint = maker_quote_asset_account.mint == quote_asset_mint.key()
+    )]
+    pub maker_quote_asset_account: Box<Account<'info, TokenAccount>>,
+
+    // Check if initializer is signer, mut is required to reduce lamports (fees)
+    #[account(mut)]
+    pub initializer: Signer<'info>,
+    
+    // System Program requred for deduction of lamports (fees)
+    pub system_program: Program<'info, System>,
+    // Token Program required to call transfer instruction
+    pub token_program: Program<'info, Token>,
+    pub associated_token_program: Program<'info, AssociatedToken>
+}
+
+#[derive(Accounts)]
 #[instruction(
     params: MakerCreatePutOptionParams, 
     vault_id: u64
@@ -1710,6 +2021,7 @@ pub struct MakerCreatePutOptionVault<'info> {
         constraint = vault_factory_info.quote_asset == quote_asset_mint.key(),
         constraint = vault_factory_info.maturity == params.maturity,
         constraint = vault_factory_info.strike == params.strike,
+        constraint = vault_factory_info.emergency_mode == false
     )]
     pub vault_factory_info: Account<'info, PutOptionVaultFactoryInfo>,
 
@@ -1794,7 +2106,8 @@ pub struct PutOptionVaultFactoryInfo {
 
     last_fair_price: u64,
     ts_last_fair_price: u64,
-    settled_price: u64
+    settled_price: u64,
+    emergency_mode: bool
 }
 
 #[account]
@@ -1930,7 +2243,10 @@ pub enum PutOptionError {
     AccountValidationError,
 
     #[msg("Option premium price is too low")]
-    OptionPremiumTooLow
+    OptionPremiumTooLow,
+
+    #[msg("Insufficient time passed since maturity to activate emergency mode, please wait more")]
+    EmergencyModeTooEarly
 
 
 }    
