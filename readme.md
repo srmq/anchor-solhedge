@@ -87,7 +87,7 @@ You can see an execution of `anchor test` at this link: https://youtu.be/SLUw9Yh
 
 We plan to take a percentage of the option premium as protocol fees (say, 1%). Notice that users get the full amount of the option,
 only the premium pays a fee. We plan to share the fee with front-ends. Let's say, we keep 50% and give 50% for the frontend. For this
-end we receive a frontend wallet in the option buying method (see function `taker_buy_lots_put_option_vault`). This currently is  even be permissionless, and anyone could implement a frontend
+end we receive a frontend wallet in the option buying method (see function `taker_buy_lots_put_option_vault`). This currently is  even permissionless, and anyone could implement a frontend
 for the protocol.
 
 ## About the author
