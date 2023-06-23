@@ -206,7 +206,7 @@ export const getMakerATAs = async (
   let conn = program.provider.connection
   let result: Array<[PutOptionMakerInfo, Account]> = []
   for (const seller of sellers) {
-    let sellerATAAddress = token.getAssociatedTokenAddressSync(mint, seller.account.owner, false)
+    let sellerATAAddress = await token.getAssociatedTokenAddress(mint, seller.account.owner, false)
     //verify if the account exist, we will not pay for its creation if not, just skip seller
     let sellerATA = await token.getAccount(conn, sellerATAAddress)
     //console.log('SELLER ATA')

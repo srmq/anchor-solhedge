@@ -1,12 +1,16 @@
 {
     "scripts": {
         "lint:fix": "prettier */*.js \"*/**/*{.js,.ts}\" -w",
-        "lint": "prettier */*.js \"*/**/*{.js,.ts}\" --check"
+        "lint": "prettier */*.js \"*/**/*{.js,.ts}\" --check",
+        "create-mock-tokens": "ts-node ./snake-tokens/index.ts"
     },
     "dependencies": {
         "@coral-xyz/anchor": "^0.27.0",
-        "@solana/spl-token": "^0.3.7",
-        "axios": "^1.4.0"
+        "@metaplex-foundation/js": "^0.19.4",
+        "@solana/spl-token": "~0.2.0",
+        "axios": "^1.4.0",
+        "bip39": "^3.1.0",
+        "dotenv": "^16.3.1"
     },
     "devDependencies": {
         "@types/bn.js": "^5.1.0",

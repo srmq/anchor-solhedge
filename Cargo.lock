@@ -1690,6 +1690,13 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a507befe795404456341dfab10cef66ead4c041f62b8b11bbb92bffe5d0953e0"
 
 [[package]]
+name = "snake-minter-devnet"
+version = "0.1.0"
+dependencies = [
+ "anchor-lang",
+]
+
+[[package]]
 name = "solana-frozen-abi"
 version = "1.15.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
