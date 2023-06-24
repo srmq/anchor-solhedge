@@ -117,256 +117,425 @@ async function mintTokens(
   )
 }
 
+function isLocalnet(conn : anchor.web3.Connection): boolean {
+  const ep = conn.rpcEndpoint.toLowerCase()
+  return ep.startsWith("http://0.0.0.0") ||
+    ep.startsWith("http://localhost") ||
+    ep.startsWith("http://127.0.0.1")
+}
 
-describe("anchor-solhedge", () => {
+describe("anchor-solhedge-localnet", () => {
   //console.log(anchor.AnchorProvider.env())
+  
   // Configure the client to use the local cluster.
   anchor.setProvider(anchor.AnchorProvider.env());
+  if (isLocalnet(anchor.getProvider().connection)) {
+    console.log('YES! This is localnet!')
 
-  const program = anchor.workspace.AnchorSolhedge as Program<AnchorSolhedge>;
+    const program = anchor.workspace.AnchorSolhedge as Program<AnchorSolhedge>;
 
-  const minterKeypair = keyPairFromSecret(TEST_MOCK_MINTER_KEY)
-  const putMakerKeypair = keyPairFromSecret(TEST_PUT_MAKER_KEY)
-  const putMaker2Keypair = keyPairFromSecret(TEST_PUT_MAKER2_KEY)
-
-  const putTakerKeypair = keyPairFromSecret(TEST_PUT_TAKER_KEY)
-  const protocolFeesKeypair = keyPairFromSecret(TEST_PROTOCOL_FEES_KEY)
-
-  const usdcToken = new anchor.web3.PublicKey("EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v")
-  const wormholeBTCToken = new anchor.web3.PublicKey("3NZ9JMVBmGAqocybic2c7LQCJScmgsAZ6vQqTDzcqmJh")
-
-  const confirmOptions: anchor.web3.ConfirmOptions = { commitment: "confirmed" };
-
-  const getReturnLog = (confirmedTransaction) => {
-    const prefix = "Program return: ";
-    let log = confirmedTransaction.meta.logMessages.find((log) =>
-      log.startsWith(prefix)
+    const minterKeypair = keyPairFromSecret(TEST_MOCK_MINTER_KEY)
+    const putMakerKeypair = keyPairFromSecret(TEST_PUT_MAKER_KEY)
+    const putMaker2Keypair = keyPairFromSecret(TEST_PUT_MAKER2_KEY)
+  
+    const putTakerKeypair = keyPairFromSecret(TEST_PUT_TAKER_KEY)
+    const protocolFeesKeypair = keyPairFromSecret(TEST_PROTOCOL_FEES_KEY)
+  
+    const usdcToken = new anchor.web3.PublicKey("EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v")
+    const wormholeBTCToken = new anchor.web3.PublicKey("3NZ9JMVBmGAqocybic2c7LQCJScmgsAZ6vQqTDzcqmJh")
+  
+    const confirmOptions: anchor.web3.ConfirmOptions = { commitment: "confirmed" };
+  
+    const getReturnLog = (confirmedTransaction) => {
+      const prefix = "Program return: ";
+      let log = confirmedTransaction.meta.logMessages.find((log) =>
+        log.startsWith(prefix)
+      );
+      log = log.slice(prefix.length);
+      const [key, data] = log.split(" ", 2);
+      const buffer = Buffer.from(data, "base64");
+      return [key, data, buffer];
+    };  
+  
+    before(
+      "Getting some SOL for minter and put maker, if needed",
+      async () => {
+        const airdrops = [
+          airdropSolIfNeeded(
+            minterKeypair,
+            anchor.getProvider().connection
+          ),
+          airdropSolIfNeeded(
+            putMakerKeypair,
+            anchor.getProvider().connection
+          ),
+          airdropSolIfNeeded(
+            putMaker2Keypair,
+            anchor.getProvider().connection
+          ),
+          airdropSolIfNeeded(
+            putTakerKeypair,
+            anchor.getProvider().connection
+          ),
+          airdropSolIfNeeded(
+            protocolFeesKeypair,
+            anchor.getProvider().connection
+          )
+        ]
+        await Promise.all(airdrops)
+      } 
     );
-    log = log.slice(prefix.length);
-    const [key, data] = log.split(" ", 2);
-    const buffer = Buffer.from(data, "base64");
-    return [key, data, buffer];
-  };  
-
-  before(
-    "Getting some SOL for minter and put maker, if needed",
-    async () => {
-      const airdrops = [
-        airdropSolIfNeeded(
-          minterKeypair,
-          anchor.getProvider().connection
-        ),
-        airdropSolIfNeeded(
-          putMakerKeypair,
-          anchor.getProvider().connection
-        ),
-        airdropSolIfNeeded(
-          putMaker2Keypair,
-          anchor.getProvider().connection
-        ),
-        airdropSolIfNeeded(
-          putTakerKeypair,
-          anchor.getProvider().connection
-        ),
-        airdropSolIfNeeded(
-          protocolFeesKeypair,
-          anchor.getProvider().connection
-        )
-      ]
-      await Promise.all(airdrops)
-    } 
-  );
-
-  _testInitializeOracleAccount(anchor.getProvider().connection)  
-
-  it("Is initialized!", async () => {
-
-    // Add your test here.
-    const tx = await program.methods.initialize().rpc();
-    console.log("Your transaction signature", tx);
-  });
-  it("Creating a put option maker vault", async () => {
-
-    const conn = anchor.getProvider().connection
-    const putMakerUSDCATA = await createTokenAccount(conn, minterKeypair, usdcToken, putMakerKeypair.publicKey)
-    
-    const usdcMintAmount = 100000
-    await mintTokens(conn, minterKeypair, usdcToken, putMakerUSDCATA.address, minterKeypair, usdcMintAmount)
-    console.log('Minted 100k usdc to test put maker')
-    const mintInfoUSDC = await token.getMint(conn, usdcToken)
-    console.log(`USDC has ${mintInfoUSDC.decimals} decimals`)
-    const updatedATA = await token.getOrCreateAssociatedTokenAccount(conn, minterKeypair, usdcToken, putMakerKeypair.publicKey)
-    const balance = updatedATA.amount / BigInt(10.0 ** mintInfoUSDC.decimals)
-    expect(balance).eq(BigInt(usdcMintAmount))
-    const mintInfoWBTC = await token.getMint(conn, wormholeBTCToken)
-    console.log(`WBTC has ${mintInfoWBTC.decimals} decimals`)
-
-    let currEpoch = Math.floor(Date.now()/1000)
-    let oneWeek = currEpoch + (7*24*60*60)
-
-    let strikeInDollars = 26000
-
-    let lamportPrice = strikeInDollars * (10 ** mintInfoUSDC.decimals)
-    console.log(`Lamport price for ${strikeInDollars} is ${lamportPrice}`)
-
-    const vaultParams = new MakerCreatePutOptionParams(
-      {
-        maturity: new anchor.BN(oneWeek+300),
-        strike: new anchor.BN(lamportPrice),
-        //lotSize is in 10^lot_size
-        lotSize: -3,
-        maxMakers: 100,
-        maxTakers: 100,
-        numLotsToSell: new anchor.BN(1000),
-        premiumLimit: new anchor.BN(Math.floor(lamportPrice/100))  
-      })
-
-    const putOptionVaultFactoryAddress = await getVaultFactoryPdaAddress(program, wormholeBTCToken, usdcToken, vaultParams.maturity, vaultParams.strike)
-    
-    console.log('Derived address for vault factory is: ' + putOptionVaultFactoryAddress.toString())
-    const beforeBalance = await anchor.getProvider().connection.getBalance(putMakerKeypair.publicKey)
-    console.log("Initial putmaker SOL balance is", beforeBalance / anchor.web3.LAMPORTS_PER_SOL)    
-    let tx = await program.methods.makerNextPutOptionVaultId(vaultParams).accounts({
-      initializer: putMakerKeypair.publicKey,
-      vaultFactoryInfo: putOptionVaultFactoryAddress,
-      baseAssetMint: mintInfoWBTC.address,
-      quoteAssetMint: mintInfoUSDC.address
-    }).signers([putMakerKeypair]).rpc(confirmOptions)
-
-    //inspired by example in https://github.com/coral-xyz/anchor/blob/master/tests/cpi-returns/tests/cpi-return.ts
-    console.log("Transaction Signature -> ", tx)
-    let t = await anchor.getProvider().connection.getTransaction(tx, {
-      maxSupportedTransactionVersion: 0,
-      commitment: "confirmed",
+  
+    _testInitializeOracleAccount(anchor.getProvider().connection)  
+  
+    it("Is initialized!", async () => {
+  
+      // Add your test here.
+      const tx = await program.methods.initialize().rpc();
+      console.log("Your transaction signature", tx);
     });
-    const [key, , buffer] = getReturnLog(t)
-    assert.equal(key, program.programId)
-    const reader = new borsh.BinaryReader(buffer)
-    const vaultNumber = reader.readU64()
-    assert.equal(vaultNumber.toNumber(), 1)
-
-    const {
-      putOptionVaultAddress, 
-      vaultBaseAssetTreasury, 
-      vaultQuoteAssetTreasury
-    } = await getVaultDerivedPdaAddresses(program, putOptionVaultFactoryAddress, wormholeBTCToken, usdcToken, vaultNumber)
-
-    //const userAVA = getMakerVaultAssociatedAccountAddress(program, putOptionVaultFactoryAddress, vaultNumber, putMakerKeypair.publicKey)
-
-    var tx2 = await program.methods.makerCreatePutOptionVault(vaultParams, vaultNumber).accounts({
-      initializer: putMakerKeypair.publicKey,
-      vaultFactoryInfo: putOptionVaultFactoryAddress,
-      vaultInfo: putOptionVaultAddress,
-      vaultBaseAssetTreasury: vaultBaseAssetTreasury,
-      vaultQuoteAssetTreasury: vaultQuoteAssetTreasury,
-      baseAssetMint: wormholeBTCToken,
-      quoteAssetMint: usdcToken,
-      makerQuoteAssetAccount: updatedATA.address,
-    }).signers([putMakerKeypair]).rpc()
-
-    console.log("Transaction Signature -> ", tx2)
-    const afterBalance = await anchor.getProvider().connection.getBalance(putMakerKeypair.publicKey)
-    console.log("Final putmaker SOL balance is", afterBalance / anchor.web3.LAMPORTS_PER_SOL)
-
-    const vaultFactories = await getAllMaybeNotMaturedFactories(program)
-    assert.equal(vaultFactories[0].account.isInitialized, true)
-    assert.equal(vaultFactories[0].account.matured, false)
-    assert.equal(vaultFactories[0].account.maturity.toNumber(), vaultParams.maturity.toNumber())
-    assert.equal(vaultFactories[0].account.baseAsset.toString(), wormholeBTCToken.toString())
-    assert.equal(vaultFactories[0].account.quoteAsset.toString(), usdcToken.toString())
-    assert.equal(vaultFactories[0].account.strike.toNumber(), vaultParams.strike.toNumber())
-    const factoryKey = vaultFactories[0].publicKey
-
-    const vaultsForFactory = await getVaultsForPutFactory(program, factoryKey)
-    assert.equal(vaultsForFactory[0].account.maxMakers, vaultParams.maxMakers)
-    assert.equal(vaultsForFactory[0].account.maxTakers, vaultParams.maxTakers)
-
-    const userInfoInVault = await getUserMakerInfoAllVaults(program, putMakerKeypair.publicKey)
-    assert.equal(userInfoInVault[0].account.premiumLimit.toNumber(), vaultParams.premiumLimit.toNumber())
-
-    const makerInfos = await getAllMakerInfosForVault(program, vaultsForFactory[0].publicKey)
-    assert.equal(makerInfos[0].account.premiumLimit.toNumber(), vaultParams.premiumLimit.toNumber())
-
-    const makerInfoForVault = await getUserMakerInfoForVault(program, vaultsForFactory[0].publicKey, putMakerKeypair.publicKey)
-    assert.equal(makerInfoForVault[0].account.premiumLimit.toNumber(), vaultParams.premiumLimit.toNumber())
-
-    console.log("Second maker entering the same put option vault")
-    const putMaker2USDCATA = await createTokenAccount(conn, minterKeypair, usdcToken, putMaker2Keypair.publicKey)
-    const usdcMint2Amount = 50000
-    await mintTokens(conn, minterKeypair, usdcToken, putMaker2USDCATA.address, minterKeypair, usdcMint2Amount)
-    console.log('Minted 50k usdc to test put maker 2')
-    const updatedATA2 = await token.getOrCreateAssociatedTokenAccount(conn, minterKeypair, usdcToken, putMaker2Keypair.publicKey)
-    const balance2 = updatedATA2.amount / BigInt(10.0 ** mintInfoUSDC.decimals)
-    expect(balance2).eq(BigInt(usdcMint2Amount))
-    const putOptionVaultFactoryAddress2 = await getVaultFactoryPdaAddress(program, wormholeBTCToken, usdcToken, vaultParams.maturity, vaultParams.strike)
-    const vaultInfo = (await getVaultsForPutFactory(program, putOptionVaultFactoryAddress2))[0]
-    const vaultBaseAssetTreasury2 = await token.getAssociatedTokenAddress(wormholeBTCToken, vaultInfo.publicKey, true)
-    const vaultQuoteAssetTreasury2 = await token.getAssociatedTokenAddress(usdcToken, vaultInfo.publicKey, true)
-
-    let tx3 = await program.methods.makerEnterPutOptionVault(new anchor.BN(500), new anchor.BN(0)).accounts({
-      initializer: putMaker2Keypair.publicKey,
-      vaultFactoryInfo: putOptionVaultFactoryAddress2,
-      vaultInfo: vaultInfo.publicKey,
-      vaultQuoteAssetTreasury: vaultQuoteAssetTreasury2,
-      baseAssetMint: wormholeBTCToken,
-      quoteAssetMint: usdcToken,
-      makerQuoteAssetAccount: updatedATA2.address,
-    }).signers([putMaker2Keypair]).rpc()
-    const makerInfos2 = await getAllMakerInfosForVault(program, vaultInfo.publicKey)
-    // console.log(makerInfos2)
-    assert.equal(makerInfos2.length, 2)
-
-    let maker2InfoForVault = await getUserMakerInfoForVault(program, vaultInfo.publicKey, putMaker2Keypair.publicKey)
-    const qty500Lots = maker2InfoForVault[0].account.quoteAssetQty.toNumber()
-    assert.isTrue(qty500Lots > 0)
-
-    let tx4 = await program.methods.makerAdjustPositionPutOptionVault(new anchor.BN(0), new anchor.BN(0)).accounts({
+    it("Creating a put option maker vault", async () => {
+  
+      const conn = anchor.getProvider().connection
+      const putMakerUSDCATA = await createTokenAccount(conn, minterKeypair, usdcToken, putMakerKeypair.publicKey)
       
-      initializer: putMaker2Keypair.publicKey,
-      vaultFactoryInfo: putOptionVaultFactoryAddress2,
-      vaultInfo: vaultInfo.publicKey,
-      vaultQuoteAssetTreasury: vaultQuoteAssetTreasury2,
-      putOptionMakerInfo: maker2InfoForVault[0].publicKey,
-      baseAssetMint: wormholeBTCToken,
-      quoteAssetMint: usdcToken,
-      makerQuoteAssetAccount: updatedATA2.address,
-    }).signers([putMaker2Keypair]).rpc()
-    maker2InfoForVault = await getUserMakerInfoForVault(program, vaultInfo.publicKey, putMaker2Keypair.publicKey)
-    assert.equal(maker2InfoForVault[0].account.quoteAssetQty.toNumber(), 0)
-
-    let tx5 = await program.methods.makerAdjustPositionPutOptionVault(new anchor.BN(500), new anchor.BN(0)).accounts({
+      const usdcMintAmount = 100000
+      await mintTokens(conn, minterKeypair, usdcToken, putMakerUSDCATA.address, minterKeypair, usdcMintAmount)
+      console.log('Minted 100k usdc to test put maker')
+      const mintInfoUSDC = await token.getMint(conn, usdcToken)
+      console.log(`USDC has ${mintInfoUSDC.decimals} decimals`)
+      const updatedATA = await token.getOrCreateAssociatedTokenAccount(conn, minterKeypair, usdcToken, putMakerKeypair.publicKey)
+      const balance = updatedATA.amount / BigInt(10.0 ** mintInfoUSDC.decimals)
+      expect(balance).eq(BigInt(usdcMintAmount))
+      const mintInfoWBTC = await token.getMint(conn, wormholeBTCToken)
+      console.log(`WBTC has ${mintInfoWBTC.decimals} decimals`)
+  
+      let currEpoch = Math.floor(Date.now()/1000)
+      let oneWeek = currEpoch + (7*24*60*60)
+  
+      let strikeInDollars = 26000
+  
+      let lamportPrice = strikeInDollars * (10 ** mintInfoUSDC.decimals)
+      console.log(`Lamport price for ${strikeInDollars} is ${lamportPrice}`)
+  
+      const vaultParams = new MakerCreatePutOptionParams(
+        {
+          maturity: new anchor.BN(oneWeek+300),
+          strike: new anchor.BN(lamportPrice),
+          //lotSize is in 10^lot_size
+          lotSize: -3,
+          maxMakers: 100,
+          maxTakers: 100,
+          numLotsToSell: new anchor.BN(1000),
+          premiumLimit: new anchor.BN(Math.floor(lamportPrice/100))  
+        })
+  
+      const putOptionVaultFactoryAddress = await getVaultFactoryPdaAddress(program, wormholeBTCToken, usdcToken, vaultParams.maturity, vaultParams.strike)
       
-      initializer: putMaker2Keypair.publicKey,
-      vaultFactoryInfo: putOptionVaultFactoryAddress2,
-      vaultInfo: vaultInfo.publicKey,
-      vaultQuoteAssetTreasury: vaultQuoteAssetTreasury2,
-      putOptionMakerInfo: maker2InfoForVault[0].publicKey,
-      baseAssetMint: wormholeBTCToken,
-      quoteAssetMint: usdcToken,
-      makerQuoteAssetAccount: updatedATA2.address,
-    }).signers([putMaker2Keypair]).rpc()
-    maker2InfoForVault = await getUserMakerInfoForVault(program, vaultInfo.publicKey, putMaker2Keypair.publicKey)
-    assert.equal(maker2InfoForVault[0].account.quoteAssetQty.toNumber(), qty500Lots)
+      console.log('Derived address for vault factory is: ' + putOptionVaultFactoryAddress.toString())
+      const beforeBalance = await anchor.getProvider().connection.getBalance(putMakerKeypair.publicKey)
+      console.log("Initial putmaker SOL balance is", beforeBalance / anchor.web3.LAMPORTS_PER_SOL)    
+      let tx = await program.methods.makerNextPutOptionVaultId(vaultParams).accounts({
+        initializer: putMakerKeypair.publicKey,
+        vaultFactoryInfo: putOptionVaultFactoryAddress,
+        baseAssetMint: mintInfoWBTC.address,
+        quoteAssetMint: mintInfoUSDC.address
+      }).signers([putMakerKeypair]).rpc(confirmOptions)
+  
+      //inspired by example in https://github.com/coral-xyz/anchor/blob/master/tests/cpi-returns/tests/cpi-return.ts
+      console.log("Transaction Signature -> ", tx)
+      let t = await anchor.getProvider().connection.getTransaction(tx, {
+        maxSupportedTransactionVersion: 0,
+        commitment: "confirmed",
+      });
+      const [key, , buffer] = getReturnLog(t)
+      assert.equal(key, program.programId)
+      const reader = new borsh.BinaryReader(buffer)
+      const vaultNumber = reader.readU64()
+      assert.equal(vaultNumber.toNumber(), 1)
+  
+      const {
+        putOptionVaultAddress, 
+        vaultBaseAssetTreasury, 
+        vaultQuoteAssetTreasury
+      } = await getVaultDerivedPdaAddresses(program, putOptionVaultFactoryAddress, wormholeBTCToken, usdcToken, vaultNumber)
+  
+      //const userAVA = getMakerVaultAssociatedAccountAddress(program, putOptionVaultFactoryAddress, vaultNumber, putMakerKeypair.publicKey)
+  
+      var tx2 = await program.methods.makerCreatePutOptionVault(vaultParams, vaultNumber).accounts({
+        initializer: putMakerKeypair.publicKey,
+        vaultFactoryInfo: putOptionVaultFactoryAddress,
+        vaultInfo: putOptionVaultAddress,
+        vaultBaseAssetTreasury: vaultBaseAssetTreasury,
+        vaultQuoteAssetTreasury: vaultQuoteAssetTreasury,
+        baseAssetMint: wormholeBTCToken,
+        quoteAssetMint: usdcToken,
+        makerQuoteAssetAccount: updatedATA.address,
+      }).signers([putMakerKeypair]).rpc()
+  
+      console.log("Transaction Signature -> ", tx2)
+      const afterBalance = await anchor.getProvider().connection.getBalance(putMakerKeypair.publicKey)
+      console.log("Final putmaker SOL balance is", afterBalance / anchor.web3.LAMPORTS_PER_SOL)
+  
+      const vaultFactories = await getAllMaybeNotMaturedFactories(program)
+      assert.equal(vaultFactories[0].account.isInitialized, true)
+      assert.equal(vaultFactories[0].account.matured, false)
+      assert.equal(vaultFactories[0].account.maturity.toNumber(), vaultParams.maturity.toNumber())
+      assert.equal(vaultFactories[0].account.baseAsset.toString(), wormholeBTCToken.toString())
+      assert.equal(vaultFactories[0].account.quoteAsset.toString(), usdcToken.toString())
+      assert.equal(vaultFactories[0].account.strike.toNumber(), vaultParams.strike.toNumber())
+      const factoryKey = vaultFactories[0].publicKey
+  
+      const vaultsForFactory = await getVaultsForPutFactory(program, factoryKey)
+      assert.equal(vaultsForFactory[0].account.maxMakers, vaultParams.maxMakers)
+      assert.equal(vaultsForFactory[0].account.maxTakers, vaultParams.maxTakers)
+  
+      const userInfoInVault = await getUserMakerInfoAllVaults(program, putMakerKeypair.publicKey)
+      assert.equal(userInfoInVault[0].account.premiumLimit.toNumber(), vaultParams.premiumLimit.toNumber())
+  
+      const makerInfos = await getAllMakerInfosForVault(program, vaultsForFactory[0].publicKey)
+      assert.equal(makerInfos[0].account.premiumLimit.toNumber(), vaultParams.premiumLimit.toNumber())
+  
+      const makerInfoForVault = await getUserMakerInfoForVault(program, vaultsForFactory[0].publicKey, putMakerKeypair.publicKey)
+      assert.equal(makerInfoForVault[0].account.premiumLimit.toNumber(), vaultParams.premiumLimit.toNumber())
+  
+      console.log("Second maker entering the same put option vault")
+      const putMaker2USDCATA = await createTokenAccount(conn, minterKeypair, usdcToken, putMaker2Keypair.publicKey)
+      const usdcMint2Amount = 50000
+      await mintTokens(conn, minterKeypair, usdcToken, putMaker2USDCATA.address, minterKeypair, usdcMint2Amount)
+      console.log('Minted 50k usdc to test put maker 2')
+      const updatedATA2 = await token.getOrCreateAssociatedTokenAccount(conn, minterKeypair, usdcToken, putMaker2Keypair.publicKey)
+      const balance2 = updatedATA2.amount / BigInt(10.0 ** mintInfoUSDC.decimals)
+      expect(balance2).eq(BigInt(usdcMint2Amount))
+      const putOptionVaultFactoryAddress2 = await getVaultFactoryPdaAddress(program, wormholeBTCToken, usdcToken, vaultParams.maturity, vaultParams.strike)
+      const vaultInfo = (await getVaultsForPutFactory(program, putOptionVaultFactoryAddress2))[0]
+      const vaultBaseAssetTreasury2 = await token.getAssociatedTokenAddress(wormholeBTCToken, vaultInfo.publicKey, true)
+      const vaultQuoteAssetTreasury2 = await token.getAssociatedTokenAddress(usdcToken, vaultInfo.publicKey, true)
+  
+      let tx3 = await program.methods.makerEnterPutOptionVault(new anchor.BN(500), new anchor.BN(0)).accounts({
+        initializer: putMaker2Keypair.publicKey,
+        vaultFactoryInfo: putOptionVaultFactoryAddress2,
+        vaultInfo: vaultInfo.publicKey,
+        vaultQuoteAssetTreasury: vaultQuoteAssetTreasury2,
+        baseAssetMint: wormholeBTCToken,
+        quoteAssetMint: usdcToken,
+        makerQuoteAssetAccount: updatedATA2.address,
+      }).signers([putMaker2Keypair]).rpc()
+      const makerInfos2 = await getAllMakerInfosForVault(program, vaultInfo.publicKey)
+      // console.log(makerInfos2)
+      assert.equal(makerInfos2.length, 2)
+  
+      let maker2InfoForVault = await getUserMakerInfoForVault(program, vaultInfo.publicKey, putMaker2Keypair.publicKey)
+      const qty500Lots = maker2InfoForVault[0].account.quoteAssetQty.toNumber()
+      assert.isTrue(qty500Lots > 0)
+  
+      let tx4 = await program.methods.makerAdjustPositionPutOptionVault(new anchor.BN(0), new anchor.BN(0)).accounts({
+        
+        initializer: putMaker2Keypair.publicKey,
+        vaultFactoryInfo: putOptionVaultFactoryAddress2,
+        vaultInfo: vaultInfo.publicKey,
+        vaultQuoteAssetTreasury: vaultQuoteAssetTreasury2,
+        putOptionMakerInfo: maker2InfoForVault[0].publicKey,
+        baseAssetMint: wormholeBTCToken,
+        quoteAssetMint: usdcToken,
+        makerQuoteAssetAccount: updatedATA2.address,
+      }).signers([putMaker2Keypair]).rpc()
+      maker2InfoForVault = await getUserMakerInfoForVault(program, vaultInfo.publicKey, putMaker2Keypair.publicKey)
+      assert.equal(maker2InfoForVault[0].account.quoteAssetQty.toNumber(), 0)
+  
+      let tx5 = await program.methods.makerAdjustPositionPutOptionVault(new anchor.BN(500), new anchor.BN(0)).accounts({
+        
+        initializer: putMaker2Keypair.publicKey,
+        vaultFactoryInfo: putOptionVaultFactoryAddress2,
+        vaultInfo: vaultInfo.publicKey,
+        vaultQuoteAssetTreasury: vaultQuoteAssetTreasury2,
+        putOptionMakerInfo: maker2InfoForVault[0].publicKey,
+        baseAssetMint: wormholeBTCToken,
+        quoteAssetMint: usdcToken,
+        makerQuoteAssetAccount: updatedATA2.address,
+      }).signers([putMaker2Keypair]).rpc()
+      maker2InfoForVault = await getUserMakerInfoForVault(program, vaultInfo.publicKey, putMaker2Keypair.publicKey)
+      assert.equal(maker2InfoForVault[0].account.quoteAssetQty.toNumber(), qty500Lots)
+  
+      let fairPrice = Math.floor(lamportPrice/100)
+      const slippageTolerance = 0.05
+  
+      fairPrice -= 100000000
+      let sellers = await getSellersInVault(program, vaultInfo.publicKey, fairPrice, slippageTolerance)
+      // fairPrice below premium limit of 1st maker
+      assert.equal(sellers.length, 1)
+  
+      fairPrice += 100000000
+      sellers = await getSellersInVault(program, vaultInfo.publicKey, fairPrice, slippageTolerance)
+      // now fairPrice is in the range of both sellers
+      assert.equal(sellers.length, 2)
+  
+      //Starting taker simulation
+      const connection = new anchor.web3.Connection(anchor.getProvider().connection.rpcEndpoint, {commitment: 'confirmed'})
+      const currentSlot = await connection.getSlot();
+      console.log('currentSlot:', currentSlot);    
+  
+      const slots = await connection.getBlocks(Math.max(currentSlot - 200, 0));
+      const oracleAddress = getOraclePubKey()
 
-    let fairPrice = Math.floor(lamportPrice/100)
-    const slippageTolerance = 0.05
+      const ticketAddress = await getUserTicketAccountAddressForVaultFactory(program, putOptionVaultFactoryAddress2, putTakerKeypair.publicKey)
+  
+      console.log("Put taker before paying oracle SOL balance is", await anchor.getProvider().connection.getBalance(putTakerKeypair.publicKey)/ anchor.web3.LAMPORTS_PER_SOL)
+      console.log("Oracle SOL balance is", await anchor.getProvider().connection.getBalance(oracleAddress)/ anchor.web3.LAMPORTS_PER_SOL)
+  
+  
+      let tx6 = await program.methods.genUpdatePutOptionFairPriceTicket().accounts({
+        vaultFactoryInfo: putOptionVaultFactoryAddress2,
+        initializer: putTakerKeypair.publicKey,
+        oracleWallet: oracleAddress,
+        putOptionFairPriceTicket: ticketAddress
+      }).signers([putTakerKeypair]).rpc()
+  
+      console.log("Put taker after paying oracle SOL balance is", await anchor.getProvider().connection.getBalance(putTakerKeypair.publicKey)/ anchor.web3.LAMPORTS_PER_SOL)    
+      console.log("Oracle SOL balance is", await anchor.getProvider().connection.getBalance(oracleAddress)/ anchor.web3.LAMPORTS_PER_SOL)
+  
+      let tx7 = await updatePutOptionFairPrice(program, putOptionVaultFactoryAddress2, putTakerKeypair.publicKey)
+      console.log("Oracle SOL balance after updating fair price is", await anchor.getProvider().connection.getBalance(oracleAddress)/ anchor.web3.LAMPORTS_PER_SOL)
+      console.log("Put taker after oracle using ticket SOL balance is", await anchor.getProvider().connection.getBalance(putTakerKeypair.publicKey)/ anchor.web3.LAMPORTS_PER_SOL)        
+      let updatedVaultFactory = await program.account.putOptionVaultFactoryInfo.fetch(putOptionVaultFactoryAddress2)
+      console.log(updatedVaultFactory.lastFairPrice.toNumber())
+      sellers = await getSellersInVault(program, vaultInfo.publicKey, updatedVaultFactory.lastFairPrice.toNumber(), slippageTolerance)
+      //console.log('sellers in vault')
+      //console.log(sellers)
+  
+      const putTakerUSDCATA = await createTokenAccount(conn, minterKeypair, usdcToken, putTakerKeypair.publicKey)
+      
+      const usdcMintAmountTaker = 10000
+      await mintTokens(conn, minterKeypair, usdcToken, putTakerUSDCATA.address, minterKeypair, usdcMintAmountTaker)
+      console.log('Minted 10k usdc to test put taker, in order to pay put option premium')
+  
+      const putTakerwBTCATA = await createTokenAccount(conn, minterKeypair, wormholeBTCToken, putTakerKeypair.publicKey)
+      const wBTCMintAmountTaker = 10
+      await mintTokens(conn, minterKeypair, wormholeBTCToken, putTakerwBTCATA.address, minterKeypair, wBTCMintAmountTaker)
+      console.log('Minted 10 wBTC to test put taker, he will eventually fund his put option from here')
+  
+      //Lets suppose put taker slippage tolerance is 5%
+      const myMaxPrice = Math.floor(updatedVaultFactory.lastFairPrice.toNumber()*1.05)
+      // notice that we defined above that the lot size of our vault is 0.001 bitcoin
+      // first maker in the vault is selling 1000 lots
+      // second maker in the vault is selling 500 lots
+      // we are buying the right to sell 600 lots, that is 0.6 bitcoin
+      // however the taker will initially fund the option with only 0.1 bitcoin
+      const btcLamports = Math.round(0.1*(10 ** mintInfoWBTC.decimals))
+      const takerLots = 600
+  
+      const protocolFeesUSDCATA = await createTokenAccount(conn, minterKeypair, usdcToken, protocolFeesKeypair.publicKey)
+  
+      const tokenAccountTestFetch = await token.getAccount(conn, protocolFeesUSDCATA.address)
+      assert.equal(tokenAccountTestFetch.address, protocolFeesUSDCATA.address)
+  
+      let sellersAndATAS = await getMakerATAs(program, sellers, usdcToken)
+      console.log("SELLERS AND ATAS")
+      console.log(sellersAndATAS)
+      const quoteAssetByLot = (10**vaultInfo.account.lotSize)*updatedVaultFactory.strike.toNumber()
+      const lotsInQuoteAsset = takerLots*quoteAssetByLot
+      console.log(`${takerLots} lots of ${10**vaultInfo.account.lotSize} at strike price ${updatedVaultFactory.strike.toNumber()} mean ${lotsInQuoteAsset} in USDC lamports`)
+      
+      // will we get the first 4, and the 5st may be one later if the fourth does not complete
+      // enough demand
+      var i = 0
+      let remainingAccounts = []
+      for (const [putOptionMakerInfo, makerATA] of sellersAndATAS) {
+        let potentialLots = 0
+        if (i < 4) {
+          const remAccountInfo = {
+            pubkey: putOptionMakerInfo.publicKey,
+            isWritable: true,
+            isSigner: false
+          }
+          const remAccountATA = {
+            pubkey: makerATA.address,
+            isWritable: true,
+            isSigner: false
+          }
+          remainingAccounts.push(remAccountInfo);
+          remainingAccounts.push(remAccountATA);
+          const quoteAssetAvailable = putOptionMakerInfo.account.quoteAssetQty.toNumber() - putOptionMakerInfo.account.volumeSold.toNumber()
+          const userPotentialLots = Math.floor(quoteAssetAvailable/quoteAssetByLot)
+          potentialLots += userPotentialLots
+          console.log(`User ${i} has at most ${userPotentialLots} lots to sell`)
+        } else if (remainingAccounts.length >= 5) {
+          break;
+        } else if (i < sellersAndATAS.length-1){
+          const quoteAssetAvailable = putOptionMakerInfo.account.quoteAssetQty.toNumber() - putOptionMakerInfo.account.volumeSold.toNumber()
+          const userPotentialLots = Math.floor(quoteAssetAvailable/quoteAssetByLot)
+          if (potentialLots + userPotentialLots >= takerLots) {
+            const remAccountInfo = {
+              pubkey: putOptionMakerInfo.publicKey,
+              isWritable: true,
+              isSigner: false
+            }
+            const remAccountATA = {
+              pubkey: makerATA.address,
+              isWritable: true,
+              isSigner: false
+            }
+            remainingAccounts.push(remAccountInfo);
+            remainingAccounts.push(remAccountATA);
+            potentialLots += userPotentialLots;
+            break; 
+          }
+        } else {
+          // last chance, this last one or the 5th
+          let quoteAssetAvailable = putOptionMakerInfo.account.quoteAssetQty.toNumber() - putOptionMakerInfo.account.volumeSold.toNumber()
+          let userPotentialLots = Math.floor(quoteAssetAvailable/quoteAssetByLot)
+          let makerPubkey = putOptionMakerInfo.publicKey
+          let ataPubkey = makerATA.address
+          if (potentialLots + userPotentialLots < takerLots) {
+            makerPubkey = sellersAndATAS[4][0].publicKey
+            ataPubkey = sellersAndATAS[4][1].address
+            quoteAssetAvailable = sellersAndATAS[4][0].account.quoteAssetQty.toNumber() - sellersAndATAS[4][0].account.volumeSold.toNumber()
+            userPotentialLots = Math.floor(quoteAssetAvailable/quoteAssetByLot)
+          }
+          const remAccountInfo = {
+            pubkey: makerPubkey,
+            isWritable: true,
+            isSigner: false
+          }
+          const remAccountATA = {
+            pubkey: ataPubkey,
+            isWritable: true,
+            isSigner: false
+          }
+          remainingAccounts.push(remAccountInfo);
+          remainingAccounts.push(remAccountATA);
+          potentialLots += userPotentialLots;
+          break;
+        }
+        i++;
+      }
+  
+      let tx8 = await program.methods.takerBuyLotsPutOptionVault(
+        new anchor.BN(myMaxPrice), 
+        new anchor.BN(takerLots), 
+        new anchor.BN(btcLamports)).accounts({
+          baseAssetMint: wormholeBTCToken,
+          quoteAssetMint: usdcToken,
+          initializer: putTakerKeypair.publicKey,
+          protocolQuoteAssetTreasury: protocolFeesUSDCATA.address,
+          frontendQuoteAssetTreasury: protocolFeesUSDCATA.address, //also sending frontend share to protocol in this test
+          takerBaseAssetAccount: putTakerwBTCATA.address,
+          takerQuoteAssetAccount: putTakerUSDCATA.address,
+          vaultFactoryInfo: putOptionVaultFactoryAddress2,
+          vaultInfo: vaultInfo.publicKey,
+          vaultBaseAssetTreasury: vaultBaseAssetTreasury2,
+        }).remainingAccounts(
+          remainingAccounts
+        ).signers([putTakerKeypair]).rpc()
+  
+        console.log("ALL DONE")
+  
+    });  
 
-    fairPrice -= 100000000
-    let sellers = await getSellersInVault(program, vaultInfo.publicKey, fairPrice, slippageTolerance)
-    // fairPrice below premium limit of 1st maker
-    assert.equal(sellers.length, 1)
+  }
 
-    fairPrice += 100000000
-    sellers = await getSellersInVault(program, vaultInfo.publicKey, fairPrice, slippageTolerance)
-    // now fairPrice is in the range of both sellers
-    assert.equal(sellers.length, 2)
-
-    //Starting taker simulation
-    const connection = new anchor.web3.Connection(anchor.getProvider().connection.rpcEndpoint, {commitment: 'confirmed'})
-    const currentSlot = await connection.getSlot();
-    console.log('currentSlot:', currentSlot);    
-
-    const slots = await connection.getBlocks(Math.max(currentSlot - 200, 0));
+  
+    // Scratch area    
     //console.log(slots)
 
     //Inspired by https://github.com/solana-developers/web3-examples/tree/main/address-lookup-tables
@@ -412,160 +581,5 @@ describe("anchor-solhedge", () => {
     })
     */
     
-    const oracleAddress = getOraclePubKey()
-
-    const ticketAddress = await getUserTicketAccountAddressForVaultFactory(program, putOptionVaultFactoryAddress2, putTakerKeypair.publicKey)
-
-    console.log("Put taker before paying oracle SOL balance is", await anchor.getProvider().connection.getBalance(putTakerKeypair.publicKey)/ anchor.web3.LAMPORTS_PER_SOL)
-    console.log("Oracle SOL balance is", await anchor.getProvider().connection.getBalance(oracleAddress)/ anchor.web3.LAMPORTS_PER_SOL)
-
-
-    let tx6 = await program.methods.genUpdatePutOptionFairPriceTicket().accounts({
-      vaultFactoryInfo: putOptionVaultFactoryAddress2,
-      initializer: putTakerKeypair.publicKey,
-      oracleWallet: oracleAddress,
-      putOptionFairPriceTicket: ticketAddress
-    }).signers([putTakerKeypair]).rpc()
-
-    console.log("Put taker after paying oracle SOL balance is", await anchor.getProvider().connection.getBalance(putTakerKeypair.publicKey)/ anchor.web3.LAMPORTS_PER_SOL)    
-    console.log("Oracle SOL balance is", await anchor.getProvider().connection.getBalance(oracleAddress)/ anchor.web3.LAMPORTS_PER_SOL)
-
-    let tx7 = await updatePutOptionFairPrice(program, putOptionVaultFactoryAddress2, putTakerKeypair.publicKey)
-    console.log("Oracle SOL balance after updating fair price is", await anchor.getProvider().connection.getBalance(oracleAddress)/ anchor.web3.LAMPORTS_PER_SOL)
-    console.log("Put taker after oracle using ticket SOL balance is", await anchor.getProvider().connection.getBalance(putTakerKeypair.publicKey)/ anchor.web3.LAMPORTS_PER_SOL)        
-    let updatedVaultFactory = await program.account.putOptionVaultFactoryInfo.fetch(putOptionVaultFactoryAddress2)
-    console.log(updatedVaultFactory.lastFairPrice.toNumber())
-    sellers = await getSellersInVault(program, vaultInfo.publicKey, updatedVaultFactory.lastFairPrice.toNumber(), slippageTolerance)
-    //console.log('sellers in vault')
-    //console.log(sellers)
-
-    const putTakerUSDCATA = await createTokenAccount(conn, minterKeypair, usdcToken, putTakerKeypair.publicKey)
-    
-    const usdcMintAmountTaker = 10000
-    await mintTokens(conn, minterKeypair, usdcToken, putTakerUSDCATA.address, minterKeypair, usdcMintAmountTaker)
-    console.log('Minted 10k usdc to test put taker, in order to pay put option premium')
-
-    const putTakerwBTCATA = await createTokenAccount(conn, minterKeypair, wormholeBTCToken, putTakerKeypair.publicKey)
-    const wBTCMintAmountTaker = 10
-    await mintTokens(conn, minterKeypair, wormholeBTCToken, putTakerwBTCATA.address, minterKeypair, wBTCMintAmountTaker)
-    console.log('Minted 10 wBTC to test put taker, he will eventually fund his put option from here')
-
-    //Lets suppose put taker slippage tolerance is 5%
-    const myMaxPrice = Math.floor(updatedVaultFactory.lastFairPrice.toNumber()*1.05)
-    // notice that we defined above that the lot size of our vault is 0.001 bitcoin
-    // first maker in the vault is selling 1000 lots
-    // second maker in the vault is selling 500 lots
-    // we are buying the right to sell 600 lots, that is 0.6 bitcoin
-    // however the taker will initially fund the option with only 0.1 bitcoin
-    const btcLamports = Math.round(0.1*(10 ** mintInfoWBTC.decimals))
-    const takerLots = 600
-
-    const protocolFeesUSDCATA = await createTokenAccount(conn, minterKeypair, usdcToken, protocolFeesKeypair.publicKey)
-
-    const tokenAccountTestFetch = await token.getAccount(conn, protocolFeesUSDCATA.address)
-    assert.equal(tokenAccountTestFetch.address, protocolFeesUSDCATA.address)
-
-    let sellersAndATAS = await getMakerATAs(program, sellers, usdcToken)
-    console.log("SELLERS AND ATAS")
-    console.log(sellersAndATAS)
-    const quoteAssetByLot = (10**vaultInfo.account.lotSize)*updatedVaultFactory.strike.toNumber()
-    const lotsInQuoteAsset = takerLots*quoteAssetByLot
-    console.log(`${takerLots} lots of ${10**vaultInfo.account.lotSize} at strike price ${updatedVaultFactory.strike.toNumber()} mean ${lotsInQuoteAsset} in USDC lamports`)
-    
-    // will we get the first 4, and the 5st may be one later if the fourth does not complete
-    // enough demand
-    var i = 0
-    let remainingAccounts = []
-    for (const [putOptionMakerInfo, makerATA] of sellersAndATAS) {
-      let potentialLots = 0
-      if (i < 4) {
-        const remAccountInfo = {
-          pubkey: putOptionMakerInfo.publicKey,
-          isWritable: true,
-          isSigner: false
-        }
-        const remAccountATA = {
-          pubkey: makerATA.address,
-          isWritable: true,
-          isSigner: false
-        }
-        remainingAccounts.push(remAccountInfo);
-        remainingAccounts.push(remAccountATA);
-        const quoteAssetAvailable = putOptionMakerInfo.account.quoteAssetQty.toNumber() - putOptionMakerInfo.account.volumeSold.toNumber()
-        const userPotentialLots = Math.floor(quoteAssetAvailable/quoteAssetByLot)
-        potentialLots += userPotentialLots
-        console.log(`User ${i} has at most ${userPotentialLots} lots to sell`)
-      } else if (remainingAccounts.length >= 5) {
-        break;
-      } else if (i < sellersAndATAS.length-1){
-        const quoteAssetAvailable = putOptionMakerInfo.account.quoteAssetQty.toNumber() - putOptionMakerInfo.account.volumeSold.toNumber()
-        const userPotentialLots = Math.floor(quoteAssetAvailable/quoteAssetByLot)
-        if (potentialLots + userPotentialLots >= takerLots) {
-          const remAccountInfo = {
-            pubkey: putOptionMakerInfo.publicKey,
-            isWritable: true,
-            isSigner: false
-          }
-          const remAccountATA = {
-            pubkey: makerATA.address,
-            isWritable: true,
-            isSigner: false
-          }
-          remainingAccounts.push(remAccountInfo);
-          remainingAccounts.push(remAccountATA);
-          potentialLots += userPotentialLots;
-          break; 
-        }
-      } else {
-        // last chance, this last one or the 5th
-        let quoteAssetAvailable = putOptionMakerInfo.account.quoteAssetQty.toNumber() - putOptionMakerInfo.account.volumeSold.toNumber()
-        let userPotentialLots = Math.floor(quoteAssetAvailable/quoteAssetByLot)
-        let makerPubkey = putOptionMakerInfo.publicKey
-        let ataPubkey = makerATA.address
-        if (potentialLots + userPotentialLots < takerLots) {
-          makerPubkey = sellersAndATAS[4][0].publicKey
-          ataPubkey = sellersAndATAS[4][1].address
-          quoteAssetAvailable = sellersAndATAS[4][0].account.quoteAssetQty.toNumber() - sellersAndATAS[4][0].account.volumeSold.toNumber()
-          userPotentialLots = Math.floor(quoteAssetAvailable/quoteAssetByLot)
-        }
-        const remAccountInfo = {
-          pubkey: makerPubkey,
-          isWritable: true,
-          isSigner: false
-        }
-        const remAccountATA = {
-          pubkey: ataPubkey,
-          isWritable: true,
-          isSigner: false
-        }
-        remainingAccounts.push(remAccountInfo);
-        remainingAccounts.push(remAccountATA);
-        potentialLots += userPotentialLots;
-        break;
-      }
-      i++;
-    }
-
-    let tx8 = await program.methods.takerBuyLotsPutOptionVault(
-      new anchor.BN(myMaxPrice), 
-      new anchor.BN(takerLots), 
-      new anchor.BN(btcLamports)).accounts({
-        baseAssetMint: wormholeBTCToken,
-        quoteAssetMint: usdcToken,
-        initializer: putTakerKeypair.publicKey,
-        protocolQuoteAssetTreasury: protocolFeesUSDCATA.address,
-        frontendQuoteAssetTreasury: protocolFeesUSDCATA.address, //also sending frontend share to protocol in this test
-        takerBaseAssetAccount: putTakerwBTCATA.address,
-        takerQuoteAssetAccount: putTakerUSDCATA.address,
-        vaultFactoryInfo: putOptionVaultFactoryAddress2,
-        vaultInfo: vaultInfo.publicKey,
-        vaultBaseAssetTreasury: vaultBaseAssetTreasury2,
-      }).remainingAccounts(
-        remainingAccounts
-      ).signers([putTakerKeypair]).rpc()
-
-      console.log("ALL DONE")
-
-  });
 
 });

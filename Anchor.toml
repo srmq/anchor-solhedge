@@ -21,6 +21,9 @@ skip-lint = false
 [programs.localnet]
 anchor_solhedge = "8DYMPBKLDULX6G7ZuNrs1FcjuMqJwefu2MEfxkCq4sWY"
 
+[programs.devnet]
+snake_minter_devnet = "2dAPtThes6YDdLL7bHUMPSduce9rKmnobSP8fQ4X5yTS"
+
 [registry]
 url = "https://api.apr.dev"
 
