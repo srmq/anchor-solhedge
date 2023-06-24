@@ -22,7 +22,7 @@ class MockData {
     name: string
     symbol: string
     description: string
-    imageName: string
+    uri: string
     decimals: number
 }
 
@@ -31,14 +31,14 @@ const mockTokens : Array<MockData> = [
         name: 'SnakeBTC',
         symbol: 'snBTC',
         description: 'A mock token for wrapped bitcoin',
-        imageName: 'SnakeBTC512.png',
+        uri: 'https://bafybeifs46wezwckp3bdcbau4sbgnebxi4d4ty2l2nof6i3j7mmq22r434.ipfs.w3s.link/snBTC-uri.json',
         decimals: 8
     },
     {
         name: 'SnakeDollar',
         symbol: 'snD',
         description: 'A mock token for the dollar',
-        imageName: 'SnakeDollar512.png',
+        uri: 'https://bafybeig4bvadwljfo4373q3rvve62exkrnjrlrb3seue6t7udpkdfolvry.ipfs.w3s.link/snD-uri.json',
         decimals: 6
     }
 ]
@@ -81,19 +81,19 @@ async function createMockToken(
         );
 
     // Read image file
-    const imageBuffer = fs.readFileSync(ASSETS_PATH + mockData.imageName);
-    const file = toMetaplexFile(imageBuffer, mockData.imageName);
-    const imageUri = await metaplex.storage().upload(file);
+    //const imageBuffer = fs.readFileSync(ASSETS_PATH + mockData.imageName);
+    //const file = toMetaplexFile(imageBuffer, mockData.imageName);
+    //const imageUri = await metaplex.storage().upload(file);
 
     // Upload the rest of offchain metadata
-    const { uri } = await metaplex
-        .nfts()
-        .uploadMetadata({
-            name: mockData.name,
-            description: mockData.description,
-            image: imageUri,
-        }, {commitment: "finalized"});
-        console.log("token metadata uploaded")    
+    // const { uri } = await metaplex
+    //     .nfts()
+    //     .uploadMetadata({
+    //         name: mockData.name,
+    //         description: mockData.description,
+    //         image: mockData.imageURL,
+    //     }, {commitment: "finalized"});
+    //     console.log("token metadata uploaded")    
 
     // Finding out the address where the metadata is stored
     const metadataPda = metaplex.nfts().pdas().metadata({ mint: tokenMint });
@@ -101,7 +101,7 @@ async function createMockToken(
     const tokenMetadata = {
         name: mockData.name,
         symbol: mockData.symbol,
-        uri: uri,
+        uri: mockData.uri,
         sellerFeeBasisPoints: 0,
         creators: null,
         collection: null,
@@ -151,8 +151,7 @@ async function createMockToken(
         TOKENS_PATH +  `${mockData.symbol}.json`,
         JSON.stringify({
           mint: tokenMint.toBase58(),
-          imageUri: imageUri,
-          metadataUri: uri,
+          metadataUri: mockData.uri,
           tokenMetadata: metadataPda.toBase58(),
           metadataTransaction: transactionSignature,
         })
