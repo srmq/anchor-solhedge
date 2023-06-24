@@ -64,15 +64,15 @@ pub struct MintSnD<'info> {
 
     // mint for SnakeDollar
     #[account(
+        mut,
         constraint = snake_dollar_mint.key() == SND_MINT_ADDRESS
     )]
     pub snake_dollar_mint: Account<'info, Mint>,
 
     #[account(
-        init_if_needed,
-        payer = initializer, 
-        associated_token::mint = snake_dollar_mint, 
-        associated_token::authority = initializer
+        mut,
+        constraint = user_snd_ata.mint == snake_dollar_mint.key(),
+        constraint = user_snd_ata.owner.key() == initializer.key()
     )]
     pub user_snd_ata: Box<Account<'info, TokenAccount>>,
 
@@ -102,15 +102,15 @@ pub struct MintSnBTC<'info> {
 
     // mint for SnakeDollar
     #[account(
+        mut,
         constraint = snake_btc_mint.key() == SNBTC_MINT_ADDRESS
     )]
     pub snake_btc_mint: Account<'info, Mint>,
 
     #[account(
-        init_if_needed,
-        payer = initializer, 
-        associated_token::mint = snake_btc_mint, 
-        associated_token::authority = initializer
+        mut,
+        constraint = user_snbtc_ata.mint == snake_btc_mint.key(),
+        constraint = user_snbtc_ata.owner.key() == initializer.key()
     )]
     pub user_snbtc_ata: Box<Account<'info, TokenAccount>>,
 

@@ -35,7 +35,7 @@ const TEST_MOCK_MINTER_KEY = [109,3,86,101,96,42,254,204,98,232,34,172,105,37,11
 // This is the where protocol fees will go, its pubkey is in lib.rs. MUST CHANGE IN REAL DEPLOYMENT
 const TEST_PROTOCOL_FEES_KEY = [170,187,172,146,241,33,174,135,129,205,0,108,30,54,58,190,112,43,95,133,59,63,136,89,167,183,88,187,65,45,66,214,212,13,191,146,112,52,37,80,118,225,123,85,122,18,26,51,145,227,30,224,105,163,126,21,155,210,207,191,239,81,83,244]
 
-function keyPairFromSecret(secret: number[]): anchor.web3.Keypair {
+export function keyPairFromSecret(secret: number[]): anchor.web3.Keypair {
   const secretKey = Uint8Array.from(secret)
   const keypair = anchor.web3.Keypair.fromSecretKey(secretKey)
   //console.log(keypair.publicKey.toString())
@@ -72,12 +72,12 @@ async function airdropSolIfNeeded(
   }
 }
 
-async function createTokenAccount(
+export const createTokenAccount = async (
   connection: anchor.web3.Connection,
   payer: anchor.web3.Keypair,
   mint: anchor.web3.PublicKey,
   owner: anchor.web3.PublicKey
-) {
+) => {
   const tokenAccount = await token.getOrCreateAssociatedTokenAccount(
       connection,
       payer,
@@ -117,7 +117,7 @@ async function mintTokens(
   )
 }
 
-function isLocalnet(conn : anchor.web3.Connection): boolean {
+export function isLocalnet(conn : anchor.web3.Connection): boolean {
   const ep = conn.rpcEndpoint.toLowerCase()
   return ep.startsWith("http://0.0.0.0") ||
     ep.startsWith("http://localhost") ||
