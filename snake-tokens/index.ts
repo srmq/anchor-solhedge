@@ -53,7 +53,7 @@ async function createMockToken(
         [Buffer.from("mint")],
         programId
     )
-    console.log("found program that will be mint authority")    
+    console.log("found program that will be mint authority")
     // This will create a token with all the necessary inputs
     var tokenMint
     try {
@@ -165,7 +165,7 @@ async function main() {
     const payer = await initializeKeypair(connection);
 
     // this is the program id of snake-minter-devnet
-    const mintAuthority = new web3.PublicKey("2dAPtThes6YDdLL7bHUMPSduce9rKmnobSP8fQ4X5yTS")
+    const mintAuthority = new web3.PublicKey("GtZpJ4KSiNksGoz9gjRg4f1ywrGYy14ZjVwuFFvuFdPy")
     for (let mockData of mockTokens) {
         await createMockToken(connection, payer, mintAuthority, mockData)
     }

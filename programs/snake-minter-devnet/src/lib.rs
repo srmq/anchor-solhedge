@@ -4,13 +4,13 @@ use anchor_spl::associated_token::AssociatedToken;
 use solana_program::{pubkey, pubkey::Pubkey};
 
 
-declare_id!("2dAPtThes6YDdLL7bHUMPSduce9rKmnobSP8fQ4X5yTS");
+declare_id!("GtZpJ4KSiNksGoz9gjRg4f1ywrGYy14ZjVwuFFvuFdPy");
 
 // Mint address for SnakeDollar, get it from snake-tokens/snD.json ("mint")
-const SND_MINT_ADDRESS: Pubkey = pubkey!("4QMc1CGEjnN3hgPRBWHJeExoWY6k7Pf5cArEnQ7QRdF9");
+const SND_MINT_ADDRESS: Pubkey = pubkey!("BJvndCYS1eMf1bg6vyJCjZiUEFcnZ5DeZKJiyZCjwN6K");
 
 // Mint address for SnakeBTC, get it from snake-tokens/snBTC.json ("mint")
-const SNBTC_MINT_ADDRESS: Pubkey = pubkey!("834NxSeQeT1XLcmcdsGXzKqhWcDRT4dLfdbzPt6hw5SP");
+const SNBTC_MINT_ADDRESS: Pubkey = pubkey!("6p728Y98qrSrvjRQmmvRLqa3JJ4P9RyLwbJ42DHxG7tP");
 
 #[program]
 pub mod snake_minter_devnet {

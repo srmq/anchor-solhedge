@@ -21,7 +21,7 @@ use anchor_spl::associated_token::AssociatedToken;
 use solana_program::{pubkey, pubkey::Pubkey, sysvar::clock::Clock};
 
 
-declare_id!("8DYMPBKLDULX6G7ZuNrs1FcjuMqJwefu2MEfxkCq4sWY");
+declare_id!("FoUvjSVZMDccmb2fCppM24N8yzVpPMKYn1h2CZDV7FFa");
 
 //Options will be negotiated up to 30 minutes to maturity
 const FREEZE_SECONDS: u64 = 30*60;

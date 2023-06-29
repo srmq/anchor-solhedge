@@ -19,10 +19,10 @@
 seeds = true
 skip-lint = false
 [programs.localnet]
-anchor_solhedge = "8DYMPBKLDULX6G7ZuNrs1FcjuMqJwefu2MEfxkCq4sWY"
+anchor_solhedge = "FoUvjSVZMDccmb2fCppM24N8yzVpPMKYn1h2CZDV7FFa"
 
 [programs.devnet]
-snake_minter_devnet = "2dAPtThes6YDdLL7bHUMPSduce9rKmnobSP8fQ4X5yTS"
+snake_minter_devnet = "GtZpJ4KSiNksGoz9gjRg4f1ywrGYy14ZjVwuFFvuFdPy"
 
 [registry]
 url = "https://api.apr.dev"
