@@ -11,10 +11,10 @@ dotenv.config()
 const PAYER_PRIVATE_KEY = process.env.PRIVATE_KEY;
 
 // Mint address for SnakeDollar, get it from snake-tokens/snD.json ("mint")
-const snakeDollarMintAddr = new anchor.web3.PublicKey("4QMc1CGEjnN3hgPRBWHJeExoWY6k7Pf5cArEnQ7QRdF9")
+const snakeDollarMintAddr = new anchor.web3.PublicKey("BJvndCYS1eMf1bg6vyJCjZiUEFcnZ5DeZKJiyZCjwN6K")
 
 // Mint address for SnakeBTC, get it from snake-tokens/snBTC.json ("mint")
-const snakeBTCMintAddr = new anchor.web3.PublicKey("834NxSeQeT1XLcmcdsGXzKqhWcDRT4dLfdbzPt6hw5SP")
+const snakeBTCMintAddr = new anchor.web3.PublicKey("6p728Y98qrSrvjRQmmvRLqa3JJ4P9RyLwbJ42DHxG7tP")
 
 describe("snake-minter-testnet", () => {
     anchor.setProvider(anchor.AnchorProvider.env());
