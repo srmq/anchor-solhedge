@@ -4,7 +4,7 @@ import { AnchorSolhedge } from "../target/types/anchor_solhedge";
 import * as token from "@solana/spl-token"
 import NodeWallet from "@coral-xyz/anchor/dist/cjs/nodewallet";
 import { printAddressLookupTable, sendTransactionV0 } from "./util";
-
+import * as dotenv from "dotenv";
 
 import { assert, expect } from "chai";
 import { 
@@ -23,6 +23,8 @@ import {
 } from "./accounts";
 import * as borsh from "borsh";
 import { getOraclePubKey, _testInitializeOracleAccount, updatePutOptionFairPrice } from "./oracle";
+
+dotenv.config()
 
 const TEST_PUT_MAKER_KEY = [7,202,200,249,141,19,80,240,20,148,116,158,237,253,235,157,26,157,95,58,241,232,6,221,233,94,248,189,255,95,87,169,170,77,151,133,53,15,237,214,51,0,2,67,60,75,202,138,200,234,155,157,153,141,162,233,83,179,126,125,248,211,212,51]
 const TEST_PUT_MAKER2_KEY = [58,214,126,90,15,29,80,114,170,70,234,58,244,144,25,23,110,1,6,19,176,12,232,59,55,64,56,53,60,187,246,157,140,117,187,255,239,135,134,192,94,254,53,137,53,27,99,244,218,86,207,59,22,189,242,164,155,104,68,250,161,179,108,4]
@@ -123,6 +125,15 @@ export function isLocalnet(conn : anchor.web3.Connection): boolean {
     ep.startsWith("http://localhost") ||
     ep.startsWith("http://127.0.0.1")
 }
+
+describe("anchor-solhedge-devnet", () => {
+  anchor.setProvider(anchor.AnchorProvider.env());
+  const DEVNET_DEVEL_KEY = process.env.PRIVATE_KEY
+  if (!isLocalnet(anchor.getProvider().connection)) {
+    console.log("anchor-solhedge.ts devnet tests starting...")
+    
+  }
+})
 
 describe("anchor-solhedge-localnet", () => {
   //console.log(anchor.AnchorProvider.env())
