@@ -126,11 +126,40 @@ export function isLocalnet(conn : anchor.web3.Connection): boolean {
     ep.startsWith("http://127.0.0.1")
 }
 
+async function getTokenBalance(
+  conn: anchor.web3.Connection,
+  payer: anchor.web3.Keypair,
+  mintAddr: anchor.web3.PublicKey,
+  user: anchor.web3.PublicKey
+) {
+  const userATA = await createTokenAccount(conn, payer, mintAddr, user);
+  const mint = await token.getMint(conn, mintAddr)
+  const balance = Number(userATA.amount) / (10 ** mint.decimals)
+  return balance
+}
+
 describe("anchor-solhedge-devnet", () => {
   anchor.setProvider(anchor.AnchorProvider.env());
-  const DEVNET_DEVEL_KEY = process.env.PRIVATE_KEY
+  const DEVNET_DEVEL_KEY = JSON.parse(process.env.PRIVATE_KEY) as number[]
+  const DEVNET_PUTMAKER1_KEY = JSON.parse(process.env.DEVNET_PUTMAKER1_KEY) as number[]
+
+  const devnetPayerKeypair = keyPairFromSecret(DEVNET_DEVEL_KEY)  
+
   if (!isLocalnet(anchor.getProvider().connection)) {
     console.log("anchor-solhedge.ts devnet tests starting...")
+
+    before(
+      "Getting some SOL for devnet payer, if needed",
+      async () => {
+        await airdropSolIfNeeded(
+          devnetPayerKeypair,
+          anchor.getProvider().connection
+        )
+
+      } 
+    )
+
+    //
     
   }
 })

@@ -60,7 +60,7 @@ export const mintSnakeBTCTo = async (
   return tx
 }
 
-xdescribe("snake-minter-testnet", () => {
+xdescribe("snake-minter-devnet", () => {
     anchor.setProvider(anchor.AnchorProvider.env());
     if (!isLocalnet(anchor.getProvider().connection)) {
         console.log('For now, this means we\'re at devnet!');
