@@ -18,7 +18,7 @@ for that vault (for instance, a vault may be of lots of $10^{-3}$ wBTC) and
 is associated to the option sellers (makers) as well as the option buyers 
 (takers) for that vault. Each vault support up to $2^{16}$ makers and $2^{16}$ takers.
 When a user enters in a vault (as a maker or taker) only the accounts to support
-her entrance are created by him, so the transaction costs are very low for everyone.
+her entrance are created by her, so the transaction costs are very low for everyone.
 
 When a user enters a put option vault as a maker, this means that (at this moment) she
 wants to sell an option taker the right to sell her wBTC at strike price at a given time in the future. Suppose

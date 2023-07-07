@@ -7,6 +7,22 @@ import {
 	TransactionMessage,
 } from "@solana/web3.js";
 
+export function keyPairFromSecret(secret: number[]): Keypair {
+	const secretKey = Uint8Array.from(secret)
+	const keypair = Keypair.fromSecretKey(secretKey)
+	//console.log(keypair.publicKey.toString())
+	return keypair
+}
+  
+
+export const isLocalnet = (conn : Connection): boolean => {
+	const ep = conn.rpcEndpoint.toLowerCase()
+	return ep.startsWith("http://0.0.0.0") ||
+	  ep.startsWith("http://localhost") ||
+	  ep.startsWith("http://127.0.0.1")
+}
+  
+
 export async function sendTransactionV0(
 	connection: Connection,
 	instructions: TransactionInstruction[],

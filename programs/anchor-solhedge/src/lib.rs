@@ -43,11 +43,11 @@ const MAX_MATURITY_FUTURE_SECONDS: u64 = 30*24*60*60;
 // has not been exercised
 const EMERGENCY_MODE_GRACE_PERIOD: u64 = 15*24*60*60;
 
-// The corresponding private key is public on oracle.ts and on github! MUST CHANGE ON REAL DEPLOYMENT!
-const ORACLE_ADDRESS: Pubkey = pubkey!("9SBVhfXD73uNe9hQRLBBmzgY7PZUTQYGaa6aPM7Gqo68");
+// The corresponding private key should be on .env as DEVNET_ORACLE_KEY
+const ORACLE_ADDRESS: Pubkey = pubkey!("Fr9SMCeLe7GoLUQq6URuvZUgaCWtEkmD7d18H6DSn81t");
 
-// The corresponding private key is public on anchor-solhedge.ts and on github! MUST CHANGE ON REAL DEPLOYMENT!
-const PROTOCOL_FEES_ADDRESS: Pubkey = pubkey!("FGmbHBRXPe6gRUe9MzuRUVaCsnViUvvWpuyTD8sV8tuh");
+// The corresponding private key should be on .env as DEVNET_PROTOCOL_FEES_KEY
+const PROTOCOL_FEES_ADDRESS: Pubkey = pubkey!("Dku3bu5hqZVBXR39s6UW65nTPQ9rjevhhrfKhfpqgi8D");
 
 const PROTOCOL_TOTAL_FEES:f64 = 0.01;
 const FRONTEND_SHARE:f64 = 0.5;

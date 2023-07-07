@@ -8,7 +8,7 @@ import * as dotenv from "dotenv";
 
 dotenv.config()
 
-const ORACLE_KEY = [173, 200, 109, 11, 190, 65, 138, 51, 173, 27, 103, 62, 80, 143, 80, 89, 208, 134, 120, 55, 24, 150, 182, 249, 188, 107, 24, 73, 82, 133, 13, 249, 125, 80, 225, 215, 197, 38, 132, 128, 90, 96, 137, 231, 45, 60, 249, 165, 142, 68, 15, 175, 252, 121, 192, 200, 171, 55, 5, 47, 191, 201, 205, 209]
+const ORACLE_KEY = JSON.parse(process.env.DEVNET_ORACLE_KEY) as number[];
 const HELLO_MOON_BEARER = process.env.HELLO_MOON_BEARER;
 const ANCHOR_FREEZE_SECONDS = 30 * 60;
 const STEP_SAMPLE_SIZE = 30;
@@ -18,6 +18,8 @@ const CURRENT_PRICE_MAX_DELAY_SECONDS = 20*60
 const RISK_FREE_YEARLY_RATE = 0.06;
 //should decrease this (e.g. to 3) when hello moon give more reliable data
 const MAX_STEPS_TO_TOO_OLD = 6;
+
+export const oracleAddr = new anchor.web3.PublicKey(process.env.DEVNET_ORACLE_PUBKEY)
 
 const axiosDefaultOptions = {
     baseURL: 'https://rest-api.hellomoon.io',

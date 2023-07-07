@@ -3,18 +3,19 @@ import { Program } from "@coral-xyz/anchor";
 import { SnakeMinterDevnet } from "../target/types/snake_minter_devnet";
 import { assert, expect } from "chai";
 import * as dotenv from "dotenv";
-import { isLocalnet, keyPairFromSecret, createTokenAccount } from "./anchor-solhedge";
+import { createTokenAccount } from "./anchor-solhedge";
 import * as token from "@solana/spl-token"
+import { isLocalnet, keyPairFromSecret } from "./util";
 
 dotenv.config()
 
 const DEVNET_DEVEL_KEY = process.env.PRIVATE_KEY;
 
 // Mint address for SnakeDollar, get it from snake-tokens/snD.json ("mint")
-const snakeDollarMintAddr = new anchor.web3.PublicKey("BJvndCYS1eMf1bg6vyJCjZiUEFcnZ5DeZKJiyZCjwN6K")
+export const snakeDollarMintAddr = new anchor.web3.PublicKey("BJvndCYS1eMf1bg6vyJCjZiUEFcnZ5DeZKJiyZCjwN6K")
 
 // Mint address for SnakeBTC, get it from snake-tokens/snBTC.json ("mint")
-const snakeBTCMintAddr = new anchor.web3.PublicKey("6p728Y98qrSrvjRQmmvRLqa3JJ4P9RyLwbJ42DHxG7tP")
+export const snakeBTCMintAddr = new anchor.web3.PublicKey("6p728Y98qrSrvjRQmmvRLqa3JJ4P9RyLwbJ42DHxG7tP")
 
 export const mintSnakeDollarTo = async (
   program: anchor.Program<SnakeMinterDevnet>,

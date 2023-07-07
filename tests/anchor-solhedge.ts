@@ -3,8 +3,9 @@ import { Program } from "@coral-xyz/anchor";
 import { AnchorSolhedge } from "../target/types/anchor_solhedge";
 import * as token from "@solana/spl-token"
 import NodeWallet from "@coral-xyz/anchor/dist/cjs/nodewallet";
-import { printAddressLookupTable, sendTransactionV0 } from "./util";
+import { printAddressLookupTable, sendTransactionV0, isLocalnet, keyPairFromSecret } from "./util";
 import * as dotenv from "dotenv";
+import { SnakeMinterDevnet } from "../target/types/snake_minter_devnet";
 
 import { assert, expect } from "chai";
 import { 
@@ -23,6 +24,8 @@ import {
 } from "./accounts";
 import * as borsh from "borsh";
 import { getOraclePubKey, _testInitializeOracleAccount, updatePutOptionFairPrice } from "./oracle";
+import { snakeBTCMintAddr, snakeDollarMintAddr, mintSnakeDollarTo } from "./snake-minter-devnet";
+import { oracleAddr } from "./oracle";
 
 dotenv.config()
 
@@ -37,11 +40,28 @@ const TEST_MOCK_MINTER_KEY = [109,3,86,101,96,42,254,204,98,232,34,172,105,37,11
 // This is the where protocol fees will go, its pubkey is in lib.rs. MUST CHANGE IN REAL DEPLOYMENT
 const TEST_PROTOCOL_FEES_KEY = [170,187,172,146,241,33,174,135,129,205,0,108,30,54,58,190,112,43,95,133,59,63,136,89,167,183,88,187,65,45,66,214,212,13,191,146,112,52,37,80,118,225,123,85,122,18,26,51,145,227,30,224,105,163,126,21,155,210,207,191,239,81,83,244]
 
-export function keyPairFromSecret(secret: number[]): anchor.web3.Keypair {
-  const secretKey = Uint8Array.from(secret)
-  const keypair = anchor.web3.Keypair.fromSecretKey(secretKey)
-  //console.log(keypair.publicKey.toString())
-  return keypair
+const DEVNET_PROTOCOL_FEES_PUBKEY = process.env.DEVNET_PROTOCOL_FEES_PUBKEY
+
+const protocolFeesAddr = new anchor.web3.PublicKey(DEVNET_PROTOCOL_FEES_PUBKEY)
+
+async function fundPeerIfNeeded(
+  payer: anchor.web3.Keypair, 
+  peer: anchor.web3.PublicKey,
+  connection: anchor.web3.Connection
+) {
+  const balance = await connection.getBalance(peer)
+  console.log(`Current balance for peer ${peer.toString()} is `, balance / anchor.web3.LAMPORTS_PER_SOL)
+  if (balance < 0.1 * anchor.web3.LAMPORTS_PER_SOL) {
+    console.log("Funding peer with 0.1 SOL")
+    const transferTransaction = new anchor.web3.Transaction().add(
+      anchor.web3.SystemProgram.transfer({
+        fromPubkey: payer.publicKey,
+        toPubkey: peer,
+        lamports: 0.1 * anchor.web3.LAMPORTS_PER_SOL
+      })
+    )
+    await anchor.web3.sendAndConfirmTransaction(connection, transferTransaction, [payer], {commitment: "finalized"})
+  }
 }
 
 async function airdropSolIfNeeded(
@@ -119,13 +139,6 @@ async function mintTokens(
   )
 }
 
-export function isLocalnet(conn : anchor.web3.Connection): boolean {
-  const ep = conn.rpcEndpoint.toLowerCase()
-  return ep.startsWith("http://0.0.0.0") ||
-    ep.startsWith("http://localhost") ||
-    ep.startsWith("http://127.0.0.1")
-}
-
 async function getTokenBalance(
   conn: anchor.web3.Connection,
   payer: anchor.web3.Keypair,
@@ -143,7 +156,9 @@ describe("anchor-solhedge-devnet", () => {
   const DEVNET_DEVEL_KEY = JSON.parse(process.env.PRIVATE_KEY) as number[]
   const DEVNET_PUTMAKER1_KEY = JSON.parse(process.env.DEVNET_PUTMAKER1_KEY) as number[]
 
-  const devnetPayerKeypair = keyPairFromSecret(DEVNET_DEVEL_KEY)  
+  const devnetPayerKeypair = keyPairFromSecret(DEVNET_DEVEL_KEY)
+  const putMaker1Keypair = keyPairFromSecret(DEVNET_PUTMAKER1_KEY)
+  const program = anchor.workspace.AnchorSolhedge as Program<AnchorSolhedge>;    
 
   if (!isLocalnet(anchor.getProvider().connection)) {
     console.log("anchor-solhedge.ts devnet tests starting...")
@@ -151,15 +166,36 @@ describe("anchor-solhedge-devnet", () => {
     before(
       "Getting some SOL for devnet payer, if needed",
       async () => {
-        await airdropSolIfNeeded(
-          devnetPayerKeypair,
-          anchor.getProvider().connection
-        )
-
+        const lamportTransfers = [
+          airdropSolIfNeeded(
+            devnetPayerKeypair,
+            anchor.getProvider().connection
+          ),
+          fundPeerIfNeeded(devnetPayerKeypair, putMaker1Keypair.publicKey, anchor.getProvider().connection),
+          fundPeerIfNeeded(devnetPayerKeypair, oracleAddr, anchor.getProvider().connection),
+          fundPeerIfNeeded(devnetPayerKeypair, protocolFeesAddr, anchor.getProvider().connection)
+        ]
+        await Promise.all(lamportTransfers)
       } 
     )
+      
+    it("Is initialized!", async () => {
+      // Add your test here.
+      const tx = await program.methods.initialize().rpc()
+      console.log("Your transaction signature", tx);
+    });
 
-    //
+    it(`Minting 500 SnakeDollars to ${putMaker1Keypair.publicKey} if his balance is < 500`, async () => {
+      const balance = await getTokenBalance(anchor.getProvider().connection, devnetPayerKeypair, snakeDollarMintAddr, putMaker1Keypair.publicKey)
+      console.log(`${putMaker1Keypair.publicKey.toString()} SnakeDollar balance is ${balance}`)
+      if (balance < 500) {
+        const snakeMinterProg = anchor.workspace.SnakeMinterDevnet as Program<SnakeMinterDevnet>;
+        const tx = await mintSnakeDollarTo(snakeMinterProg, putMaker1Keypair)
+        console.log('Mint tx: ', tx)
+      }
+    });
+
+
     
   }
 })
