@@ -20,10 +20,11 @@ import {
   getUserMakerInfoForVault,
   getSellersInVault,
   getUserTicketAccountAddressForVaultFactory,
-  getMakerATAs
+  getMakerATAs,
+  getMakerNextPutOptionVaultIdFromTx
 } from "./accounts";
 import * as borsh from "borsh";
-import { getOraclePubKey, _testInitializeOracleAccount, updatePutOptionFairPrice } from "./oracle";
+import { getOraclePubKey, _testInitializeOracleAccount, updatePutOptionFairPrice, lastKnownPrice } from "./oracle";
 import { snakeBTCMintAddr, snakeDollarMintAddr, mintSnakeDollarTo } from "./snake-minter-devnet";
 import { oracleAddr } from "./oracle";
 
@@ -164,7 +165,7 @@ describe("anchor-solhedge-devnet", () => {
     console.log("anchor-solhedge.ts devnet tests starting...")
 
     before(
-      "Getting some SOL for devnet payer, if needed",
+      "Getting some SOL for devnet payer and his pals, if needed",
       async () => {
         const lamportTransfers = [
           airdropSolIfNeeded(
@@ -195,7 +196,96 @@ describe("anchor-solhedge-devnet", () => {
       }
     });
 
+    it(`Now ${putMaker1Keypair.publicKey} is creating a Vault Factory and a Vault inside it as a PutMaker`, async () => {
+      const btcPrice = await lastKnownPrice("3NZ9JMVBmGAqocybic2c7LQCJScmgsAZ6vQqTDzcqmJh") //wBTC
+      console.log("Last known price for wBTC is ", btcPrice.price)
 
+      const currEpoch = Math.floor(Date.now()/1000)
+      const oneDay = currEpoch + (24*60*60)
+      const myStrike = Math.round(btcPrice.price*0.99)
+      console.log(`I will offer 10 put options of 0.001 bitcoins each, at strike ${myStrike} with maturity 24 hours from now`)
+      const vaultParams = new MakerCreatePutOptionParams(
+        {
+          maturity: new anchor.BN(oneDay),
+          strike: new anchor.BN(myStrike),
+          //lotSize is in 10^lot_size
+          lotSize: -3,
+          maxMakers: 100,
+          maxTakers: 100,
+          numLotsToSell: new anchor.BN(10),
+          premiumLimit: new anchor.BN(0)  
+        }
+      )
+      const putOptionVaultFactoryAddress = await getVaultFactoryPdaAddress(program, snakeBTCMintAddr, snakeDollarMintAddr, vaultParams.maturity, vaultParams.strike)
+
+      const tx = await program.methods.makerNextPutOptionVaultId(vaultParams).accounts({
+        initializer: putMaker1Keypair.publicKey,
+        vaultFactoryInfo: putOptionVaultFactoryAddress,
+        baseAssetMint: snakeBTCMintAddr,
+        quoteAssetMint: snakeDollarMintAddr
+      }).signers([putMaker1Keypair]).rpc({ commitment: "confirmed" })
+
+      console.log("Transaction for getting next VaultId is ", tx)
+
+      const vaultNumber = await getMakerNextPutOptionVaultIdFromTx(program, anchor.getProvider().connection, tx)
+
+      const {
+        putOptionVaultAddress, 
+        vaultBaseAssetTreasury, 
+        vaultQuoteAssetTreasury
+      } = await getVaultDerivedPdaAddresses(program, putOptionVaultFactoryAddress, snakeBTCMintAddr, snakeDollarMintAddr, vaultNumber)
+
+      const putMaker1SnakeDollarATA = await token.getOrCreateAssociatedTokenAccount(
+        anchor.getProvider().connection,
+        putMaker1Keypair,
+        snakeDollarMintAddr,
+        putMaker1Keypair.publicKey
+      )
+  
+
+      var tx2 = await program.methods.makerCreatePutOptionVault(vaultParams, vaultNumber).accounts({
+        initializer: putMaker1Keypair.publicKey,
+        vaultFactoryInfo: putOptionVaultFactoryAddress,
+        vaultInfo: putOptionVaultAddress,
+        vaultBaseAssetTreasury: vaultBaseAssetTreasury,
+        vaultQuoteAssetTreasury: vaultQuoteAssetTreasury,
+        baseAssetMint: snakeBTCMintAddr,
+        quoteAssetMint: snakeDollarMintAddr,
+        makerQuoteAssetAccount: putMaker1SnakeDollarATA.address,
+      }).signers([putMaker1Keypair]).rpc()
+      console.log("Transaction for creating PutOptionVault is ", tx2)
+
+      const vaultFactories = await getAllMaybeNotMaturedFactories(program)
+      let myFactory = undefined
+      for (let vaultFactory of vaultFactories) {
+        if (
+          vaultFactory.account.maturity.toNumber() == vaultParams.maturity.toNumber() &&
+          vaultFactory.account.baseAsset.toString() == snakeBTCMintAddr.toString() &&
+          vaultFactory.account.quoteAsset.toString() == snakeDollarMintAddr.toString() &&
+          vaultFactory.account.strike.toNumber() == vaultParams.strike.toNumber()
+        ) {
+          myFactory = vaultFactory
+          break
+        }
+      }
+      assert.notEqual(myFactory, undefined)
+      assert.equal(myFactory.account.isInitialized, true)
+      assert.equal(myFactory.account.matured, false)
+      const factoryKey = myFactory.publicKey
+  
+      const vaultsForFactory = await getVaultsForPutFactory(program, factoryKey)
+      assert.equal(vaultsForFactory[0].account.maxMakers, vaultParams.maxMakers)
+      assert.equal(vaultsForFactory[0].account.maxTakers, vaultParams.maxTakers)
+  
+      const userInfoInVault = await getUserMakerInfoAllVaults(program, putMaker1Keypair.publicKey)
+      assert.equal(userInfoInVault[0].account.premiumLimit.toNumber(), vaultParams.premiumLimit.toNumber())
+  
+      const makerInfos = await getAllMakerInfosForVault(program, vaultsForFactory[0].publicKey)
+      assert.equal(makerInfos[0].account.premiumLimit.toNumber(), vaultParams.premiumLimit.toNumber())
+  
+      const makerInfoForVault = await getUserMakerInfoForVault(program, vaultsForFactory[0].publicKey, putMaker1Keypair.publicKey)
+      assert.equal(makerInfoForVault[0].account.premiumLimit.toNumber(), vaultParams.premiumLimit.toNumber())
+    });      
     
   }
 })

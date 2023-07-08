@@ -5,6 +5,7 @@ import axios from 'axios'
 import { cdfStdNormal, convertInterest, volatilitySquared } from "./stats";
 import * as token from "@solana/spl-token"
 import * as dotenv from "dotenv";
+import { CandleGranularity, TokenPrice, granularityToSeconds } from "./util";
 
 dotenv.config()
 
@@ -184,14 +185,6 @@ export const updatePutOptionFairPrice = async (
     return tx
 }
 
-enum CandleGranularity {
-    ONE_MIN = "ONE_MIN",
-    FIVE_MIN = "FIVE_MIN",
-    ONE_HOUR = "ONE_HOUR",
-    ONE_DAY = "ONE_DAY",
-    ONE_WEEK = "ONE_WEEK"
-}
-
 function computePutOptionFairPrice(
     currentPrice: number, 
     strike: number, 
@@ -217,21 +210,12 @@ function computePutOptionFairPrice(
         return p
 }
 
-function granularityToSeconds(granularity: CandleGranularity): number {
-    switch(granularity) {
-        case CandleGranularity.ONE_MIN:
-            return 60;
-        case CandleGranularity.FIVE_MIN:
-            return 5*60;
-        case CandleGranularity.ONE_HOUR:
-            return 60*60;
-        case CandleGranularity.ONE_DAY:
-            return 24*60*60;
-        case CandleGranularity.ONE_WEEK:
-            return 7*24*60*60;
-        default:
-            throw Error(`Internal error, unknown granularity: ${granularity}`)
-    }
+export const lastKnownPrice = async (
+    mint: string
+): Promise<TokenPrice> => {
+    const lastCandle = await tokenLastMinuteCandle(mint)
+    const result = new TokenPrice(lastCandle)
+    return result
 }
 
 async function tokenLastMinuteCandle(mint: string) {

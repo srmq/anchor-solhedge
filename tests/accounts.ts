@@ -3,7 +3,39 @@ import { AnchorSolhedge } from "../target/types/anchor_solhedge";
 import { getAssociatedTokenAddress, Account } from "@solana/spl-token"
 import { bs58 } from "@coral-xyz/anchor/dist/cjs/utils/bytes";
 import * as token from "@solana/spl-token"
+import { Connection } from "@solana/web3.js";
+import * as borsh from "borsh";
 
+const getReturnLog = (confirmedTransaction) => {
+  const prefix = "Program return: ";
+  let log = confirmedTransaction.meta.logMessages.find((log) =>
+    log.startsWith(prefix)
+  );
+  log = log.slice(prefix.length);
+  const [key, data] = log.split(" ", 2);
+  const buffer = Buffer.from(data, "base64");
+  return [key, data, buffer];
+};  
+
+
+export const getMakerNextPutOptionVaultIdFromTx = async (
+  program: anchor.Program<AnchorSolhedge>, 
+  connection: Connection, 
+  txid: string
+): Promise<anchor.BN> => {
+      //inspired by example in https://github.com/coral-xyz/anchor/blob/master/tests/cpi-returns/tests/cpi-return.ts
+      let t = await connection.getTransaction(txid, {
+        maxSupportedTransactionVersion: 0,
+        commitment: "confirmed",
+      });
+      const [key, , buffer] = getReturnLog(t)
+      if(key != program.programId) {
+        throw new Error("Transaction is from another program")
+      }
+      const reader = new borsh.BinaryReader(buffer)
+      const vaultNumber = reader.readU64()
+      return vaultNumber
+}
 
 export const getVaultFactoryPdaAddress = async (
   program: anchor.Program<AnchorSolhedge>,

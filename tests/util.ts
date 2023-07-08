@@ -85,3 +85,49 @@ export async function printAddressLookupTable(
 		console.log(`   Index: ${i}  Address: ${address.toBase58()}`);
 	}
 }
+
+export enum CandleGranularity {
+    ONE_MIN = "ONE_MIN",
+    FIVE_MIN = "FIVE_MIN",
+    ONE_HOUR = "ONE_HOUR",
+    ONE_DAY = "ONE_DAY",
+    ONE_WEEK = "ONE_WEEK"
+}
+
+export const granularityToSeconds = (granularity: CandleGranularity): number => {
+    switch(granularity) {
+        case CandleGranularity.ONE_MIN:
+            return 60;
+        case CandleGranularity.FIVE_MIN:
+            return 5*60;
+        case CandleGranularity.ONE_HOUR:
+            return 60*60;
+        case CandleGranularity.ONE_DAY:
+            return 24*60*60;
+        case CandleGranularity.ONE_WEEK:
+            return 7*24*60*60;
+        default:
+            throw Error(`Internal error, unknown granularity: ${granularity}`)
+    }
+}
+
+
+
+export class TokenPrice {
+	mint: string
+	price: number
+	ts: number
+  
+	constructor(candle: {
+	  mint: string
+	  granularity: CandleGranularity
+	  startTime: number
+	  close: number
+	}){
+	  this.mint = candle.mint
+	  this.price = candle.close
+	  const addToStart = granularityToSeconds(candle.granularity)
+	  this.ts = candle.startTime + addToStart
+	}
+  }
+  
