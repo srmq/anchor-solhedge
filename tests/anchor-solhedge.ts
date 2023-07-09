@@ -45,6 +45,9 @@ const DEVNET_PROTOCOL_FEES_PUBKEY = process.env.DEVNET_PROTOCOL_FEES_PUBKEY
 
 const protocolFeesAddr = new anchor.web3.PublicKey(DEVNET_PROTOCOL_FEES_PUBKEY)
 
+// Should be the same as FREEZE_SECONDS in anchor-solhedge/lib.rs
+const FREEZE_SECONDS = 30*60
+
 async function fundPeerIfNeeded(
   payer: anchor.web3.Keypair, 
   peer: anchor.web3.PublicKey,
@@ -147,8 +150,7 @@ async function getTokenBalance(
   user: anchor.web3.PublicKey
 ) {
   const userATA = await createTokenAccount(conn, payer, mintAddr, user);
-  const mint = await token.getMint(conn, mintAddr)
-  const balance = Number(userATA.amount) / (10 ** mint.decimals)
+  const balance = Number(userATA.amount)
   return balance
 }
 
@@ -156,9 +158,11 @@ describe("anchor-solhedge-devnet", () => {
   anchor.setProvider(anchor.AnchorProvider.env());
   const DEVNET_DEVEL_KEY = JSON.parse(process.env.PRIVATE_KEY) as number[]
   const DEVNET_PUTMAKER1_KEY = JSON.parse(process.env.DEVNET_PUTMAKER1_KEY) as number[]
+  const DEVNET_PUTMAKER2_KEY = JSON.parse(process.env.DEVNET_PUTMAKER2_KEY) as number[]
 
   const devnetPayerKeypair = keyPairFromSecret(DEVNET_DEVEL_KEY)
   const putMaker1Keypair = keyPairFromSecret(DEVNET_PUTMAKER1_KEY)
+  const putMaker2Keypair = keyPairFromSecret(DEVNET_PUTMAKER2_KEY)
   const program = anchor.workspace.AnchorSolhedge as Program<AnchorSolhedge>;    
 
   if (!isLocalnet(anchor.getProvider().connection)) {
@@ -173,6 +177,7 @@ describe("anchor-solhedge-devnet", () => {
             anchor.getProvider().connection
           ),
           fundPeerIfNeeded(devnetPayerKeypair, putMaker1Keypair.publicKey, anchor.getProvider().connection),
+          fundPeerIfNeeded(devnetPayerKeypair, putMaker2Keypair.publicKey, anchor.getProvider().connection),
           fundPeerIfNeeded(devnetPayerKeypair, oracleAddr, anchor.getProvider().connection),
           fundPeerIfNeeded(devnetPayerKeypair, protocolFeesAddr, anchor.getProvider().connection)
         ]
@@ -187,7 +192,9 @@ describe("anchor-solhedge-devnet", () => {
     });
 
     it(`Minting 500 SnakeDollars to ${putMaker1Keypair.publicKey} if his balance is < 500`, async () => {
-      const balance = await getTokenBalance(anchor.getProvider().connection, devnetPayerKeypair, snakeDollarMintAddr, putMaker1Keypair.publicKey)
+      let balance = await getTokenBalance(anchor.getProvider().connection, devnetPayerKeypair, snakeDollarMintAddr, putMaker1Keypair.publicKey)
+      const mint = await token.getMint(anchor.getProvider().connection, snakeDollarMintAddr)
+      balance /= 10**mint.decimals
       console.log(`${putMaker1Keypair.publicKey.toString()} SnakeDollar balance is ${balance}`)
       if (balance < 500) {
         const snakeMinterProg = anchor.workspace.SnakeMinterDevnet as Program<SnakeMinterDevnet>;
@@ -196,7 +203,21 @@ describe("anchor-solhedge-devnet", () => {
       }
     });
 
-    it(`Now ${putMaker1Keypair.publicKey} is creating a Vault Factory and a Vault inside it as a PutMaker`, async () => {
+    it(`Minting 500 SnakeDollars to ${putMaker2Keypair.publicKey} if his balance is < 500`, async () => {
+      let balance = await getTokenBalance(anchor.getProvider().connection, devnetPayerKeypair, snakeDollarMintAddr, putMaker2Keypair.publicKey)
+      const mint = await token.getMint(anchor.getProvider().connection, snakeDollarMintAddr)
+      balance /= 10**mint.decimals
+
+      console.log(`${putMaker2Keypair.publicKey.toString()} SnakeDollar balance is ${balance}`)
+      if (balance < 500) {
+        const snakeMinterProg = anchor.workspace.SnakeMinterDevnet as Program<SnakeMinterDevnet>;
+        const tx = await mintSnakeDollarTo(snakeMinterProg, putMaker2Keypair)
+        console.log('Mint tx: ', tx)
+      }
+    });
+
+
+    xit(`Now ${putMaker1Keypair.publicKey} is creating a Vault Factory and a Vault inside it as a PutMaker`, async () => {
       const btcPrice = await lastKnownPrice("3NZ9JMVBmGAqocybic2c7LQCJScmgsAZ6vQqTDzcqmJh") //wBTC
       console.log("Last known price for wBTC is ", btcPrice.price)
 
@@ -285,7 +306,56 @@ describe("anchor-solhedge-devnet", () => {
   
       const makerInfoForVault = await getUserMakerInfoForVault(program, vaultsForFactory[0].publicKey, putMaker1Keypair.publicKey)
       assert.equal(makerInfoForVault[0].account.premiumLimit.toNumber(), vaultParams.premiumLimit.toNumber())
-    });      
+    });
+
+    it(`Now a second Putmaker, ${putMaker2Keypair.publicKey} will try to enter existing PutOptionVaults`, async () => {
+      const vaultFactories = await getAllMaybeNotMaturedFactories(program)
+      console.log('Number of maybe not matured factories: ', vaultFactories.length)
+      for (let vaultFactory of vaultFactories) {
+        const maturity = vaultFactory.account.maturity.toNumber()
+        console.log(`Maturity of VaultFactory ${vaultFactory.publicKey} is ${maturity}`)
+        if (
+          vaultFactory.account.quoteAsset.toString() == snakeDollarMintAddr.toString() && 
+          maturity > (Math.floor(Date.now()/1000) + FREEZE_SECONDS + 60)
+        ) {
+            // will only try to enter if there is at least 1 minute to freeze time
+          console.log("Getting vaults for fault factory ", vaultFactory.publicKey.toString())
+          const vaults = await getVaultsForPutFactory(program, vaultFactory.publicKey)
+          for (let vault of vaults) {
+            if (vault.account.isMakersFull) continue
+            if ((await getUserMakerInfoForVault(program, vault.publicKey, putMaker2Keypair.publicKey)).length > 0) {
+              continue
+            }
+            const minEntry = Math.ceil((10**vault.account.lotSize)*vaultFactory.account.strike.toNumber())
+            const myBalance = await getTokenBalance(program.provider.connection, putMaker2Keypair, snakeDollarMintAddr, putMaker2Keypair.publicKey)
+            const {
+              putOptionVaultAddress, 
+              vaultBaseAssetTreasury, 
+              vaultQuoteAssetTreasury
+            } = await getVaultDerivedPdaAddresses(program, vaultFactory.publicKey, vaultFactory.account.baseAsset, vaultFactory.account.quoteAsset, vault.account.ord)
+      
+            if (myBalance >= minEntry) {
+              const numLots = Math.floor(myBalance/minEntry)
+              let tx3 = await program.methods.makerEnterPutOptionVault(new anchor.BN(numLots), new anchor.BN(0)).accounts({
+                initializer: putMaker2Keypair.publicKey,
+                vaultFactoryInfo: vaultFactory.publicKey,
+                vaultInfo: vault.publicKey,
+                vaultQuoteAssetTreasury: vaultQuoteAssetTreasury,
+                baseAssetMint: vaultFactory.account.baseAsset,
+                quoteAssetMint: vaultFactory.account.quoteAsset,
+                makerQuoteAssetAccount: token.getAssociatedTokenAddressSync(vaultFactory.account.quoteAsset, putMaker2Keypair.publicKey, false),
+              }).signers([putMaker2Keypair]).rpc()
+              console.log(`Transaction for ${putMaker2Keypair.publicKey} entering vault ${vault.publicKey} is`, tx3)
+              let maker2InfoForVault = await getUserMakerInfoForVault(program, vault.publicKey, putMaker2Keypair.publicKey)
+              const quoteAssetQty = maker2InfoForVault[0].account.quoteAssetQty.toNumber()
+              assert.isTrue(quoteAssetQty > 0)
+        
+            }
+          }
+        }
+      }
+    });
+
     
   }
 })
