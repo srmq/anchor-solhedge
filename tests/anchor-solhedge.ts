@@ -356,6 +356,35 @@ describe("anchor-solhedge-devnet", () => {
       }
     });
 
+    it(`Now put maker ${putMaker2Keypair.publicKey} will play with adjusting his position on vaults`, async () => {
+      const vaultFactories = await getAllMaybeNotMaturedFactories(program)
+      console.log(`${putMaker2Keypair.publicKey} will look at ${vaultFactories.length} maybe not matured factories: `)
+      for (let vaultFactory of vaultFactories) { 
+        const maturity = vaultFactory.account.maturity.toNumber()
+        console.log(`Maturity of VaultFactory ${vaultFactory.publicKey} is ${maturity}`)
+        if (
+          vaultFactory.account.quoteAsset.toString() == snakeDollarMintAddr.toString() && 
+          maturity > (Math.floor(Date.now()/1000) + FREEZE_SECONDS + 60)
+        ) {
+            // will only try to enter if there is at least 1 minute to freeze time
+          console.log("Getting vaults for fault factory ", vaultFactory.publicKey.toString())
+          const vaults = await getVaultsForPutFactory(program, vaultFactory.publicKey)
+
+          for (let vault of vaults) {
+            let maker2InfoForVault = await getUserMakerInfoForVault(program, vault.publicKey, putMaker2Keypair.publicKey)
+            if (maker2InfoForVault.length > 0) { // putmaker is in the vault
+              const notSoldQty = maker2InfoForVault[0].account.quoteAssetQty.toNumber() - maker2InfoForVault[0].account.volumeSold.toNumber()
+              if (notSoldQty > 0) {
+                //FIXME TODO
+              }
+            }
+          }
+
+        }
+      }
+
+    });
+
     
   }
 })
