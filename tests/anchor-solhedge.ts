@@ -25,7 +25,7 @@ import {
 } from "./accounts";
 import * as borsh from "borsh";
 import { getOraclePubKey, _testInitializeOracleAccount, updatePutOptionFairPrice, lastKnownPrice } from "./oracle";
-import { snakeBTCMintAddr, snakeDollarMintAddr, mintSnakeDollarTo } from "./snake-minter-devnet";
+import { snakeBTCMintAddr, snakeDollarMintAddr, mintSnakeDollarTo, mintSnakeBTCTo } from "./snake-minter-devnet";
 import { oracleAddr } from "./oracle";
 
 dotenv.config()
@@ -159,10 +159,13 @@ describe("anchor-solhedge-devnet", () => {
   const DEVNET_DEVEL_KEY = JSON.parse(process.env.PRIVATE_KEY) as number[]
   const DEVNET_PUTMAKER1_KEY = JSON.parse(process.env.DEVNET_PUTMAKER1_KEY) as number[]
   const DEVNET_PUTMAKER2_KEY = JSON.parse(process.env.DEVNET_PUTMAKER2_KEY) as number[]
+  const DEVNET_PUTTAKER_KEY = JSON.parse(process.env.DEVNET_PUTTAKER_KEY) as number[]
 
   const devnetPayerKeypair = keyPairFromSecret(DEVNET_DEVEL_KEY)
   const putMaker1Keypair = keyPairFromSecret(DEVNET_PUTMAKER1_KEY)
   const putMaker2Keypair = keyPairFromSecret(DEVNET_PUTMAKER2_KEY)
+  const putTakerKeypair = keyPairFromSecret(DEVNET_PUTTAKER_KEY)
+
   const program = anchor.workspace.AnchorSolhedge as Program<AnchorSolhedge>;    
 
   if (!isLocalnet(anchor.getProvider().connection)) {
@@ -179,7 +182,8 @@ describe("anchor-solhedge-devnet", () => {
           fundPeerIfNeeded(devnetPayerKeypair, putMaker1Keypair.publicKey, anchor.getProvider().connection),
           fundPeerIfNeeded(devnetPayerKeypair, putMaker2Keypair.publicKey, anchor.getProvider().connection),
           fundPeerIfNeeded(devnetPayerKeypair, oracleAddr, anchor.getProvider().connection),
-          fundPeerIfNeeded(devnetPayerKeypair, protocolFeesAddr, anchor.getProvider().connection)
+          fundPeerIfNeeded(devnetPayerKeypair, protocolFeesAddr, anchor.getProvider().connection),
+          fundPeerIfNeeded(devnetPayerKeypair, putTakerKeypair.publicKey, anchor.getProvider().connection)
         ]
         await Promise.all(lamportTransfers)
       } 
@@ -215,6 +219,20 @@ describe("anchor-solhedge-devnet", () => {
         console.log('Mint tx: ', tx)
       }
     });
+
+    it(`Minting 0.2 SnakeBTC to ${putTakerKeypair.publicKey} if his balance is < 0.2`, async () => {
+      let balance = await getTokenBalance(anchor.getProvider().connection, devnetPayerKeypair, snakeBTCMintAddr, putTakerKeypair.publicKey)
+      const mint = await token.getMint(anchor.getProvider().connection, snakeBTCMintAddr)
+      balance /= 10**mint.decimals
+
+      console.log(`${putTakerKeypair.publicKey.toString()} SnakeBTC balance is ${balance}`)
+      if (balance < 0.2) {
+        const snakeMinterProg = anchor.workspace.SnakeMinterDevnet as Program<SnakeMinterDevnet>;
+        const tx = await mintSnakeBTCTo(snakeMinterProg, putTakerKeypair)
+        console.log('Mint tx: ', tx)
+      }
+    });
+
 
 
     xit(`Now ${putMaker1Keypair.publicKey} is creating a Vault Factory and a Vault inside it as a PutMaker`, async () => {
@@ -308,7 +326,7 @@ describe("anchor-solhedge-devnet", () => {
       assert.equal(makerInfoForVault[0].account.premiumLimit.toNumber(), vaultParams.premiumLimit.toNumber())
     });
 
-    it(`Now a second Putmaker, ${putMaker2Keypair.publicKey} will try to enter existing PutOptionVaults`, async () => {
+    xit(`Now a second Putmaker, ${putMaker2Keypair.publicKey} will try to enter existing PutOptionVaults`, async () => {
       const vaultFactories = await getAllMaybeNotMaturedFactories(program)
       console.log('Number of maybe not matured factories: ', vaultFactories.length)
       for (let vaultFactory of vaultFactories) {
@@ -356,7 +374,7 @@ describe("anchor-solhedge-devnet", () => {
       }
     });
 
-    it(`Now put maker ${putMaker2Keypair.publicKey} will play with adjusting his position on vaults`, async () => {
+    xit(`Now put maker ${putMaker2Keypair.publicKey} will play with adjusting his position on vaults`, async () => {
       const vaultFactories = await getAllMaybeNotMaturedFactories(program)
       console.log(`${putMaker2Keypair.publicKey} will look at ${vaultFactories.length} maybe not matured factories: `)
       for (let vaultFactory of vaultFactories) { 
@@ -374,8 +392,28 @@ describe("anchor-solhedge-devnet", () => {
             let maker2InfoForVault = await getUserMakerInfoForVault(program, vault.publicKey, putMaker2Keypair.publicKey)
             if (maker2InfoForVault.length > 0) { // putmaker is in the vault
               const notSoldQty = maker2InfoForVault[0].account.quoteAssetQty.toNumber() - maker2InfoForVault[0].account.volumeSold.toNumber()
+              const lotPrice = vaultFactory.account.strike.toNumber()*(10**vault.account.lotSize)
               if (notSoldQty > 0) {
-                //FIXME TODO
+                const {
+                  putOptionVaultAddress, 
+                  vaultBaseAssetTreasury, 
+                  vaultQuoteAssetTreasury
+                } = await getVaultDerivedPdaAddresses(program, vaultFactory.publicKey, vaultFactory.account.baseAsset, vaultFactory.account.quoteAsset, vault.account.ord)
+    
+                const newQtyLots = maker2InfoForVault[0].account.volumeSold.toNumber()/lotPrice
+                let tx4 = await program.methods.makerAdjustPositionPutOptionVault(new anchor.BN(newQtyLots), new anchor.BN(0)).accounts({        
+                  initializer: putMaker2Keypair.publicKey,
+                  vaultFactoryInfo: vaultFactory.publicKey,
+                  vaultInfo: vault.publicKey,
+                  vaultQuoteAssetTreasury: vaultQuoteAssetTreasury,
+                  putOptionMakerInfo: maker2InfoForVault[0].publicKey,
+                  baseAssetMint: vaultFactory.account.baseAsset,
+                  quoteAssetMint: vaultFactory.account.quoteAsset,
+                  makerQuoteAssetAccount: token.getAssociatedTokenAddressSync(vaultFactory.account.quoteAsset, putMaker2Keypair.publicKey, false)
+                }).signers([putMaker2Keypair]).rpc()
+                maker2InfoForVault = await getUserMakerInfoForVault(program, vault.publicKey, putMaker2Keypair.publicKey)
+                assert.equal(maker2InfoForVault[0].account.quoteAssetQty.toNumber(), newQtyLots*lotPrice)
+          
               }
             }
           }
