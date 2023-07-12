@@ -21,7 +21,8 @@ import {
   getSellersInVault,
   getUserTicketAccountAddressForVaultFactory,
   getMakerATAs,
-  getMakerNextPutOptionVaultIdFromTx
+  getMakerNextPutOptionVaultIdFromTx,
+  getUserTakerInfoForVault
 } from "./accounts";
 import * as borsh from "borsh";
 import { getOraclePubKey, _testInitializeOracleAccount, updatePutOptionFairPrice, lastKnownPrice } from "./oracle";
@@ -220,13 +221,13 @@ describe("anchor-solhedge-devnet", () => {
       }
     });
 
-    it(`Minting 0.2 SnakeBTC to ${putTakerKeypair.publicKey} if his balance is < 0.2`, async () => {
+    it(`Minting 0.02 SnakeBTC to ${putTakerKeypair.publicKey} if his balance is < 0.02`, async () => {
       let balance = await getTokenBalance(anchor.getProvider().connection, devnetPayerKeypair, snakeBTCMintAddr, putTakerKeypair.publicKey)
       const mint = await token.getMint(anchor.getProvider().connection, snakeBTCMintAddr)
       balance /= 10**mint.decimals
 
       console.log(`${putTakerKeypair.publicKey.toString()} SnakeBTC balance is ${balance}`)
-      if (balance < 0.2) {
+      if (balance < 0.02) {
         const snakeMinterProg = anchor.workspace.SnakeMinterDevnet as Program<SnakeMinterDevnet>;
         const tx = await mintSnakeBTCTo(snakeMinterProg, putTakerKeypair)
         console.log('Mint tx: ', tx)
@@ -421,6 +422,44 @@ describe("anchor-solhedge-devnet", () => {
         }
       }
 
+    });
+
+    it("A PutTaker will not try to find vaults where he can enter", async () => {
+      const vaultFactories = await getAllMaybeNotMaturedFactories(program)
+      console.log(`PutTaker ${putTakerKeypair.publicKey} will look at ${vaultFactories.length} maybe not matured factories: `)
+      for (let vaultFactory of vaultFactories) { 
+        const maturity = vaultFactory.account.maturity.toNumber()
+        console.log(`Maturity of VaultFactory ${vaultFactory.publicKey} is ${maturity}`)
+        if (
+          vaultFactory.account.baseAsset.toString() == snakeBTCMintAddr.toString() && 
+          maturity > (Math.floor(Date.now()/1000) + FREEZE_SECONDS + 60)
+        ) {
+            // will only try to enter if there is at least 1 minute to freeze time
+          console.log("Getting vaults for fault factory ", vaultFactory.publicKey.toString())
+          const vaults = await getVaultsForPutFactory(program, vaultFactory.publicKey)
+
+          for (let vault of vaults) {
+            if (!vault.account.isTakersFull) {
+              const myTakerInfo = await getUserTakerInfoForVault(program, vault.publicKey, putTakerKeypair.publicKey)
+              if (myTakerInfo.length > 0) {
+                continue
+              }
+              console.log(`PutTaker ${putTakerKeypair.publicKey} is not in vault ${vault.publicKey} will try to enter`)
+              const ticketAddress = await getUserTicketAccountAddressForVaultFactory(program, vault.account.factoryVault, putTakerKeypair.publicKey)
+              const oracleAddress = getOraclePubKey()
+              let tx6 = await program.methods.genUpdatePutOptionFairPriceTicket().accounts({
+                vaultFactoryInfo: vault.account.factoryVault,
+                initializer: putTakerKeypair.publicKey,
+                oracleWallet: oracleAddress,
+                putOptionFairPriceTicket: ticketAddress
+              }).signers([putTakerKeypair]).rpc()
+              let tx7 = await updatePutOptionFairPrice(program, vault.account.factoryVault, putTakerKeypair.publicKey)
+              //FIXME CONTINUE prepare oracle for snakecoins
+            }
+          }
+        }
+      }
+      //const ticketAddress = await getUserTicketAccountAddressForVaultFactory(program, putOptionVaultFactoryAddress2, putTakerKeypair.publicKey)
     });
 
     
