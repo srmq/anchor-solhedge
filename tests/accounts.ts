@@ -192,6 +192,30 @@ export const getUserMakerInfoAllVaults = async(
 
 }
 
+export const getUserTakerInfoAllVaults = async(
+  program: anchor.Program<AnchorSolhedge>,
+  userAddress: anchor.web3.PublicKey,
+) => {
+
+  const filter = [
+    {
+      memcmp: {
+        offset: 8 + // Discriminator
+                1 + // is_initialized: bool,
+                2 + // ord: u16
+                8 + // max_base_asset: u64
+                8 + // qty_deposited: u64
+                1, // is_settled: bool
+        bytes: userAddress.toBase58()
+      },
+    },
+  ]
+  const res = program.account.putOptionTakerInfo.all(filter)
+  return res
+
+}
+
+
 export const getUserTakerInfoForVault = async(
   program: anchor.Program<AnchorSolhedge>,
   vaultAddress: anchor.web3.PublicKey,

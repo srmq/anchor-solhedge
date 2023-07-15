@@ -24,7 +24,9 @@ import {
   getMakerATAs,
   getMakerNextPutOptionVaultIdFromTx,
   getUserTakerInfoForVault,
-  getSellersAsRemainingAccounts
+  getSellersAsRemainingAccounts,
+  getUserTakerInfoAllVaults
+
 } from "./accounts";
 import * as borsh from "borsh";
 import { getOraclePubKey, _testInitializeOracleAccount, updatePutOptionFairPrice, lastKnownPrice } from "./oracle";
@@ -594,6 +596,34 @@ describe("anchor-solhedge-devnet", () => {
       }
     });
     
+    it("Now put takers will get out of the settled options they are in", async () => {
+      const putTakers = [putTakerKeypair]
+      for (const putTaker of putTakers) {
+        const takerInfoAllVaults = await getUserTakerInfoAllVaults(program, putTaker.publicKey)
+        for (const takerInfo of takerInfoAllVaults) {
+          const vaultAddr = takerInfo.account.putOptionVault
+          const vaultInfo = await program.account.putOptionVaultInfo.fetch(vaultAddr)
+          const vaultFactoryInfo = await program.account.putOptionVaultFactoryInfo.fetch(vaultInfo.factoryVault)
+          const takerQuoteAssetATA = await createTokenAccount(anchor.getProvider().connection, devnetPayerKeypair, snakeDollarMintAddr, putTaker.publicKey)
+          if (vaultFactoryInfo.matured && !takerInfo.account.isSettled) {
+            console.log(`Put taker ${putTaker.publicKey} will get of option vault ${vaultAddr}`)
+            let tx = await program.methods.takerSettlePutOption().accounts({
+              baseAssetMint: vaultFactoryInfo.baseAsset,
+              initializer: putTaker.publicKey,
+              putOptionTakerInfo: takerInfo.publicKey,
+              quoteAssetMint: vaultFactoryInfo.quoteAsset,
+              takerBaseAssetAccount: token.getAssociatedTokenAddressSync(snakeBTCMintAddr, putTaker.publicKey, false),
+              takerQuoteAssetAccount: takerQuoteAssetATA.address,
+              vaultBaseAssetTreasury: token.getAssociatedTokenAddressSync(snakeBTCMintAddr, vaultAddr, true),
+              vaultFactoryInfo: vaultInfo.factoryVault,
+              vaultInfo: vaultAddr,
+              vaultQuoteAssetTreasury: token.getAssociatedTokenAddressSync(snakeDollarMintAddr, vaultAddr, true)
+            }).signers([putTaker]).rpc()
+            console.log("Transaction id that settled option for taker: ", tx)
+          }
+        }
+      }
+    });
     
   }
 })
