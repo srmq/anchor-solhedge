@@ -20,6 +20,7 @@ import {
   getUserMakerInfoForVault,
   getSellersInVault,
   getUserTicketAccountAddressForVaultFactory,
+  getUserSettleTicketAccountAddressForVaultFactory,
   getMakerATAs,
   getMakerNextPutOptionVaultIdFromTx,
   getUserTakerInfoForVault,
@@ -28,7 +29,7 @@ import {
 import * as borsh from "borsh";
 import { getOraclePubKey, _testInitializeOracleAccount, updatePutOptionFairPrice, lastKnownPrice } from "./oracle";
 import { snakeBTCMintAddr, snakeDollarMintAddr, mintSnakeDollarTo, mintSnakeBTCTo } from "./snake-minter-devnet";
-import { oracleAddr } from "./oracle";
+import { oracleAddr, updatePutOptionSettlePrice } from "./oracle";
 
 dotenv.config()
 
@@ -248,8 +249,6 @@ describe("anchor-solhedge-devnet", () => {
         console.log('Mint tx: ', tx)
       }
     });
-
-
 
     xit(`Now ${putMaker1Keypair.publicKey} is creating a Vault Factory and a Vault inside it as a PutMaker`, async () => {
       console.log(">>>>> CALLING LAST KNOWN PRICE")
@@ -535,6 +534,37 @@ describe("anchor-solhedge-devnet", () => {
       }
     });
 
+    it(`Now PutMaker ${putMaker1Keypair.publicKey} will ask oracle to settle price on matured vaults he is in`, async () => {
+      const makerInfosAllVaults = await getUserMakerInfoAllVaults(program, putMaker1Keypair.publicKey)
+      let currEpoch = Math.floor(Date.now()/1000)
+
+      for (const makerInfo of makerInfosAllVaults) {
+        const vaultAddr = makerInfo.account.putOptionVault
+        const vaultInfo = await program.account.putOptionVaultInfo.fetch(vaultAddr)
+        const vaultFactoryInfo = await program.account.putOptionVaultFactoryInfo.fetch(vaultInfo.factoryVault)
+        if (!vaultFactoryInfo.matured && vaultFactoryInfo.maturity.toNumber() < currEpoch) {
+          console.log(`Vault factory ${vaultInfo.factoryVault} has matured, will now ask oracle to settle price`)
+          const ticketAddress = await getUserSettleTicketAccountAddressForVaultFactory(program, vaultInfo.factoryVault, putMaker1Keypair.publicKey)
+          const ticketAccount = await program.account.putOptionSettlePriceTicketInfo.fetch(ticketAddress)
+          console.log('TICKET ACCOUNT IS')
+          console.log(ticketAccount)
+          if (ticketAccount?.isUsed == undefined) {
+            const oracleAddress = getOraclePubKey()
+            let tx6 = await program.methods.genSettlePutOptionPriceTicket().accounts({
+              vaultFactoryInfo: vaultInfo.factoryVault,
+              initializer: putMaker1Keypair.publicKey,
+              oracleWallet: oracleAddress,
+              putOptionSettlePriceTicket: ticketAddress
+            }).signers([putMaker1Keypair]).rpc()
+            console.log('Transaction that generated settle price ticket is ', tx6)  
+          }
+          const tx7 = await updatePutOptionSettlePrice(program, vaultInfo.factoryVault, putMaker1Keypair.publicKey)
+          console.log('Transaction where oracle updated settle price for vault factory was ', tx7)
+        }
+      }
+    });
+
+    
     
   }
 })
