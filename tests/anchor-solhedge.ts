@@ -114,9 +114,9 @@ export const createTokenAccount = async (
       owner
   )
   
-  console.log(
-      `Token Account: ${tokenAccount.address}`
-  )
+  // console.log(
+  //     `Token Account: ${tokenAccount.address}`
+  // )
 
   return tokenAccount
 }
@@ -564,6 +564,35 @@ describe("anchor-solhedge-devnet", () => {
       }
     });
 
+    it("Now put makers will get out of the settled options they are in", async () => {
+      const putMakers = [putMaker1Keypair, putMaker2Keypair]
+      for (const putMaker of putMakers) {
+        const makerInfosAllVaults = await getUserMakerInfoAllVaults(program, putMaker.publicKey)
+        for (const makerInfo of makerInfosAllVaults) { 
+          const vaultAddr = makerInfo.account.putOptionVault
+          const vaultInfo = await program.account.putOptionVaultInfo.fetch(vaultAddr)
+          const vaultFactoryInfo = await program.account.putOptionVaultFactoryInfo.fetch(vaultInfo.factoryVault)
+          const baseAssetATAAddr = await createTokenAccount(anchor.getProvider().connection, devnetPayerKeypair, snakeBTCMintAddr, putMaker.publicKey)
+          if (vaultFactoryInfo.matured && !makerInfo.account.isSettled) {
+            console.log(`Put maker ${putMaker.publicKey} will get of option vault ${vaultAddr}`)
+            let tx = await program.methods.makerSettlePutOption().accounts({
+              baseAssetMint: vaultFactoryInfo.baseAsset,
+              initializer: putMaker.publicKey,
+              makerBaseAssetAccount: baseAssetATAAddr.address,
+              makerQuoteAssetAccount: token.getAssociatedTokenAddressSync(snakeDollarMintAddr, putMaker.publicKey, false),
+              putOptionMakerInfo: makerInfo.publicKey,
+              quoteAssetMint: vaultFactoryInfo.quoteAsset,
+              vaultBaseAssetTreasury: token.getAssociatedTokenAddressSync(snakeBTCMintAddr, vaultAddr, true),
+              vaultFactoryInfo: vaultInfo.factoryVault,
+              vaultInfo: vaultAddr,
+              vaultQuoteAssetTreasury: token.getAssociatedTokenAddressSync(snakeDollarMintAddr, vaultAddr, true)
+            }).signers([putMaker]).rpc()
+            console.log("Transaction id that settled option for maker: ", tx)
+          }
+        }
+        
+      }
+    });
     
     
   }
