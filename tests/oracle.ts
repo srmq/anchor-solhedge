@@ -6,6 +6,7 @@ import { cdfStdNormal, convertInterest, volatilitySquared } from "./stats";
 import * as token from "@solana/spl-token"
 import * as dotenv from "dotenv";
 import { CandleGranularity, TokenPrice, granularityToSeconds } from "./util";
+import { snakeDollarMintAddr, snakeBTCMintAddr } from "./snake-minter-devnet";
 
 dotenv.config()
 
@@ -13,6 +14,16 @@ const ORACLE_KEY = JSON.parse(process.env.DEVNET_ORACLE_KEY) as number[];
 const HELLO_MOON_BEARER = process.env.HELLO_MOON_BEARER;
 const ANCHOR_FREEZE_SECONDS = 30 * 60;
 const STEP_SAMPLE_SIZE = 30;
+
+// SHOULD BE false on mainnet!
+const DEVNET_MODE = true;
+
+var devnetMockMintTranslator = undefined
+if (DEVNET_MODE) {
+    devnetMockMintTranslator = []
+    devnetMockMintTranslator[snakeBTCMintAddr.toBase58()] = '3NZ9JMVBmGAqocybic2c7LQCJScmgsAZ6vQqTDzcqmJh'
+    devnetMockMintTranslator[snakeDollarMintAddr.toBase58()] = 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v'
+}
 
 //should decrease this (e.g. to 5*60) when hello moon give more reliable data
 const CURRENT_PRICE_MAX_DELAY_SECONDS = 20*60
@@ -39,6 +50,10 @@ class SupportedAssets {
         this.assets = new Set<string>([
             '3NZ9JMVBmGAqocybic2c7LQCJScmgsAZ6vQqTDzcqmJh,EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v' // (Wormhole wBTC, USDC)
         ])
+        if (DEVNET_MODE) {
+            const mockPair = snakeBTCMintAddr.toBase58() + ',' + snakeDollarMintAddr.toBase58()
+            this.assets.add(mockPair)
+        }
     }
     public isSupported(baseAsset: anchor.web3.PublicKey, quoteAsset: anchor.web3.PublicKey): boolean {
         return this.assets.has(baseAsset.toBase58() + ',' + quoteAsset.toBase58())
@@ -239,6 +254,9 @@ async function tokenLastMinuteCandle(mint: string) {
 
 async function getCandlesticksBetween(mint: string, startTimeEpoch: number, endTimeEpoch: number, granularity: CandleGranularity) {
     const endpoint = "/v0/token/candlesticks"
+    if (DEVNET_MODE) {
+        mint = devnetMockMintTranslator[mint]
+    }
     let postData = {
         "startTime": {
             "operator": "between",
@@ -277,7 +295,11 @@ async function getCandlesticksBetween(mint: string, startTimeEpoch: number, endT
 
 async function getCandlesticksFrom(mint: string, startTimeEpoch: number, granularity: CandleGranularity) {
     const endpoint = "/v0/token/candlesticks"
-    //console.log("Called getCandlesticksFrom")
+    if (DEVNET_MODE) {
+        mint = devnetMockMintTranslator[mint]
+        console.log("Mint will be translated to ", mint)
+    }
+    console.log("Called getCandlesticksFrom")
     let postData = {
         "startTime": {
             "operator": ">=",

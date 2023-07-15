@@ -22,7 +22,8 @@ import {
   getUserTicketAccountAddressForVaultFactory,
   getMakerATAs,
   getMakerNextPutOptionVaultIdFromTx,
-  getUserTakerInfoForVault
+  getUserTakerInfoForVault,
+  getSellersAsRemainingAccounts
 } from "./accounts";
 import * as borsh from "borsh";
 import { getOraclePubKey, _testInitializeOracleAccount, updatePutOptionFairPrice, lastKnownPrice } from "./oracle";
@@ -221,6 +222,20 @@ describe("anchor-solhedge-devnet", () => {
       }
     });
 
+    it(`Minting 500 SnakeDollars to taker ${putTakerKeypair.publicKey} if his balance is < 500, he needs dollars to pay for option premium`, async () => {
+      let balance = await getTokenBalance(anchor.getProvider().connection, devnetPayerKeypair, snakeDollarMintAddr, putTakerKeypair.publicKey)
+      const mint = await token.getMint(anchor.getProvider().connection, snakeDollarMintAddr)
+      balance /= 10**mint.decimals
+
+      console.log(`${putTakerKeypair.publicKey.toString()} SnakeDollar balance is ${balance}`)
+      if (balance < 500) {
+        const snakeMinterProg = anchor.workspace.SnakeMinterDevnet as Program<SnakeMinterDevnet>;
+        const tx = await mintSnakeDollarTo(snakeMinterProg, putTakerKeypair)
+        console.log('Mint tx: ', tx)
+      }
+    });
+
+
     it(`Minting 0.02 SnakeBTC to ${putTakerKeypair.publicKey} if his balance is < 0.02`, async () => {
       let balance = await getTokenBalance(anchor.getProvider().connection, devnetPayerKeypair, snakeBTCMintAddr, putTakerKeypair.publicKey)
       const mint = await token.getMint(anchor.getProvider().connection, snakeBTCMintAddr)
@@ -237,7 +252,8 @@ describe("anchor-solhedge-devnet", () => {
 
 
     xit(`Now ${putMaker1Keypair.publicKey} is creating a Vault Factory and a Vault inside it as a PutMaker`, async () => {
-      const btcPrice = await lastKnownPrice("3NZ9JMVBmGAqocybic2c7LQCJScmgsAZ6vQqTDzcqmJh") //wBTC
+      console.log(">>>>> CALLING LAST KNOWN PRICE")
+      const btcPrice = await lastKnownPrice(snakeBTCMintAddr.toBase58()) //wBTC
       console.log("Last known price for wBTC is ", btcPrice.price)
 
       const currEpoch = Math.floor(Date.now()/1000)
@@ -424,7 +440,8 @@ describe("anchor-solhedge-devnet", () => {
 
     });
 
-    it("A PutTaker will not try to find vaults where he can enter", async () => {
+    xit("A PutTaker will now try to find vaults where he can enter", async () => {
+      const slippageTolerance = 0.05      
       const vaultFactories = await getAllMaybeNotMaturedFactories(program)
       console.log(`PutTaker ${putTakerKeypair.publicKey} will look at ${vaultFactories.length} maybe not matured factories: `)
       for (let vaultFactory of vaultFactories) { 
@@ -447,19 +464,75 @@ describe("anchor-solhedge-devnet", () => {
               console.log(`PutTaker ${putTakerKeypair.publicKey} is not in vault ${vault.publicKey} will try to enter`)
               const ticketAddress = await getUserTicketAccountAddressForVaultFactory(program, vault.account.factoryVault, putTakerKeypair.publicKey)
               const oracleAddress = getOraclePubKey()
+              console.log("Put taker before paying oracle SOL balance is", await anchor.getProvider().connection.getBalance(putTakerKeypair.publicKey)/ anchor.web3.LAMPORTS_PER_SOL)
+              console.log("Oracle SOL balance is", await anchor.getProvider().connection.getBalance(oracleAddress)/ anchor.web3.LAMPORTS_PER_SOL)
+        
               let tx6 = await program.methods.genUpdatePutOptionFairPriceTicket().accounts({
                 vaultFactoryInfo: vault.account.factoryVault,
                 initializer: putTakerKeypair.publicKey,
                 oracleWallet: oracleAddress,
                 putOptionFairPriceTicket: ticketAddress
               }).signers([putTakerKeypair]).rpc()
+
+              console.log("Put taker after paying oracle SOL balance is", await anchor.getProvider().connection.getBalance(putTakerKeypair.publicKey)/ anchor.web3.LAMPORTS_PER_SOL)    
+              console.log("Oracle SOL balance is", await anchor.getProvider().connection.getBalance(oracleAddress)/ anchor.web3.LAMPORTS_PER_SOL)
+                
               let tx7 = await updatePutOptionFairPrice(program, vault.account.factoryVault, putTakerKeypair.publicKey)
-              //FIXME CONTINUE prepare oracle for snakecoins
+
+              console.log("Oracle SOL balance after updating fair price is", await anchor.getProvider().connection.getBalance(oracleAddress)/ anchor.web3.LAMPORTS_PER_SOL)
+              console.log("Put taker after oracle using ticket SOL balance is", await anchor.getProvider().connection.getBalance(putTakerKeypair.publicKey)/ anchor.web3.LAMPORTS_PER_SOL)        
+              let updatedVaultFactory = await program.account.putOptionVaultFactoryInfo.fetch(vault.account.factoryVault)
+              console.log("Updated put option fair price is", updatedVaultFactory.lastFairPrice.toNumber())
+              const sellers = await getSellersInVault(program, vault.publicKey, updatedVaultFactory.lastFairPrice.toNumber(), slippageTolerance)
+
+              const vaultPendingSell = vault.account.makersTotalPendingSell.toNumber()
+              console.log('Total quote asset volume pending sell ', vaultPendingSell)
+              const lotQuoteAssetValue = updatedVaultFactory.strike.toNumber()*(10**vault.account.lotSize)
+              const lotsOnSell = Math.floor(vaultPendingSell/lotQuoteAssetValue)
+              console.log(`There are at most ${lotsOnSell} on sell in vault ${vault.publicKey}`)
+
+              let balanceBaseAsset = await getTokenBalance(anchor.getProvider().connection, devnetPayerKeypair, snakeBTCMintAddr, putTakerKeypair.publicKey)
+              const btcLamports = balanceBaseAsset
+              const mint = await token.getMint(anchor.getProvider().connection, snakeBTCMintAddr)
+              balanceBaseAsset /= 10**mint.decimals
+              console.log(`${putTakerKeypair.publicKey.toString()} SnakeBTC balance is ${balanceBaseAsset}`)
+
+              // value of base assets that putTaker has in quote asset lamports
+              const valueAtStrike = balanceBaseAsset*vaultFactory.account.strike.toNumber()
+              const maxLotsToBuy = Math.floor(valueAtStrike/lotQuoteAssetValue)
+              let balanceQuoteAsset = await getTokenBalance(anchor.getProvider().connection, devnetPayerKeypair, snakeDollarMintAddr, putTakerKeypair.publicKey)
+              console.log(`Puttaker has ${balanceQuoteAsset} in quote asset lamports`)
+              const lotPremium = updatedVaultFactory.lastFairPrice.toNumber()*(10**vault.account.lotSize)
+              const lotsQuoteAssetCanBuy = balanceQuoteAsset/lotPremium
+              const lotsToBuy = Math.min(maxLotsToBuy, lotsQuoteAssetCanBuy)
+              console.log(`Puttaker ${putTakerKeypair.publicKey} will try to buy ${lotsToBuy} lots`)
+              const remainingAccounts = await getSellersAsRemainingAccounts(lotsToBuy, program, sellers)
+              const protocolFeesUSDCATA = await createTokenAccount(anchor.getProvider().connection, devnetPayerKeypair, snakeDollarMintAddr, protocolFeesAddr)
+              const myMaxPrice = Math.floor(updatedVaultFactory.lastFairPrice.toNumber()*1.05)
+              
+
+              let tx8 = await program.methods.takerBuyLotsPutOptionVault(
+                new anchor.BN(myMaxPrice), 
+                new anchor.BN(lotsToBuy), 
+                new anchor.BN(btcLamports)).accounts({
+                  baseAssetMint: snakeBTCMintAddr,
+                  quoteAssetMint: snakeDollarMintAddr,
+                  initializer: putTakerKeypair.publicKey,
+                  protocolQuoteAssetTreasury: protocolFeesUSDCATA.address,
+                  frontendQuoteAssetTreasury: protocolFeesUSDCATA.address, //also sending frontend share to protocol in this test
+                  takerBaseAssetAccount: token.getAssociatedTokenAddressSync(snakeBTCMintAddr, putTakerKeypair.publicKey, false),
+                  takerQuoteAssetAccount: token.getAssociatedTokenAddressSync(snakeDollarMintAddr, putTakerKeypair.publicKey, false),
+                  vaultFactoryInfo: vaultFactory.publicKey,
+                  vaultInfo: vault.publicKey,
+                  vaultBaseAssetTreasury: token.getAssociatedTokenAddressSync(snakeBTCMintAddr, vault.publicKey, true),
+                }).remainingAccounts(
+                  remainingAccounts
+                ).signers([putTakerKeypair]).rpc()
+                console.log(`Transaction id where Puttaker ${putTakerKeypair.publicKey} entered vault ${vault.publicKey}: `, tx8)
             }
           }
         }
       }
-      //const ticketAddress = await getUserTicketAccountAddressForVaultFactory(program, putOptionVaultFactoryAddress2, putTakerKeypair.publicKey)
     });
 
     

@@ -267,11 +267,107 @@ export const getUserMakerInfoForVault = async(
   return res
 }
 
+export const getSellersAsRemainingAccounts = async (
+  wantedLots: number,
+  program: anchor.Program<AnchorSolhedge>,
+  sellers: PutOptionMakerInfo[],
+  vaultAccount?: any,
+  vaultFactoryAccount?: any
+) => {
+  if (vaultAccount == undefined) {
+    const vaultAddr = sellers[0].account.putOptionVault
+    vaultAccount = await program.account.putOptionVaultInfo.fetch(vaultAddr)  
+  }
+  if (vaultFactoryAccount == undefined) {
+    const vaultFactoryAddr = vaultAccount.factoryVault
+    vaultFactoryAccount = await program.account.putOptionVaultFactoryInfo.fetch(vaultFactoryAddr)  
+  }
+  const mint = vaultFactoryAccount.quoteAsset
+  let sellersAndATAS = await getMakerATAs(program, sellers, mint)
+  const quoteAssetByLot = (10**vaultAccount.lotSize)*vaultFactoryAccount.strike.toNumber()
+  const lotsInQuoteAsset = wantedLots*quoteAssetByLot
+  console.log(`${wantedLots} lots of ${10**vaultAccount.lotSize} at strike price ${vaultFactoryAccount.strike.toNumber()} mean ${lotsInQuoteAsset} in quote asset lamports`)
+  // will we get the first 4, and the 5st may be one later if the fourth does not complete
+  // enough demand
+  var i = 0
+  let remainingAccounts = []
+  for (const [putOptionMakerInfo, makerATA] of sellersAndATAS) {
+    let potentialLots = 0
+    if (i < 4) {
+      const remAccountInfo = {
+        pubkey: putOptionMakerInfo.publicKey,
+        isWritable: true,
+        isSigner: false
+      }
+      const remAccountATA = {
+        pubkey: makerATA.address,
+        isWritable: true,
+        isSigner: false
+      }
+      remainingAccounts.push(remAccountInfo);
+      remainingAccounts.push(remAccountATA);
+      const quoteAssetAvailable = putOptionMakerInfo.account.quoteAssetQty.toNumber() - putOptionMakerInfo.account.volumeSold.toNumber()
+      const userPotentialLots = Math.floor(quoteAssetAvailable/quoteAssetByLot)
+      potentialLots += userPotentialLots
+      console.log(`User ${i} has at most ${userPotentialLots} lots to sell`)
+    } else if (remainingAccounts.length >= 5) {
+      break;
+    } else if (i < sellersAndATAS.length-1){
+      const quoteAssetAvailable = putOptionMakerInfo.account.quoteAssetQty.toNumber() - putOptionMakerInfo.account.volumeSold.toNumber()
+      const userPotentialLots = Math.floor(quoteAssetAvailable/quoteAssetByLot)
+      if (potentialLots + userPotentialLots >= wantedLots) {
+        const remAccountInfo = {
+          pubkey: putOptionMakerInfo.publicKey,
+          isWritable: true,
+          isSigner: false
+        }
+        const remAccountATA = {
+          pubkey: makerATA.address,
+          isWritable: true,
+          isSigner: false
+        }
+        remainingAccounts.push(remAccountInfo);
+        remainingAccounts.push(remAccountATA);
+        potentialLots += userPotentialLots;
+        break; 
+      }
+    } else {
+      // last chance, this last one or the 5th
+      let quoteAssetAvailable = putOptionMakerInfo.account.quoteAssetQty.toNumber() - putOptionMakerInfo.account.volumeSold.toNumber()
+      let userPotentialLots = Math.floor(quoteAssetAvailable/quoteAssetByLot)
+      let makerPubkey = putOptionMakerInfo.publicKey
+      let ataPubkey = makerATA.address
+      if (potentialLots + userPotentialLots < wantedLots) {
+        makerPubkey = sellersAndATAS[4][0].publicKey
+        ataPubkey = sellersAndATAS[4][1].address
+        quoteAssetAvailable = sellersAndATAS[4][0].account.quoteAssetQty.toNumber() - sellersAndATAS[4][0].account.volumeSold.toNumber()
+        userPotentialLots = Math.floor(quoteAssetAvailable/quoteAssetByLot)
+      }
+      const remAccountInfo = {
+        pubkey: makerPubkey,
+        isWritable: true,
+        isSigner: false
+      }
+      const remAccountATA = {
+        pubkey: ataPubkey,
+        isWritable: true,
+        isSigner: false
+      }
+      remainingAccounts.push(remAccountInfo);
+      remainingAccounts.push(remAccountATA);
+      potentialLots += userPotentialLots;
+      break;
+    }
+    i++;
+  }
+  return remainingAccounts
+}
+
 export const getMakerATAs = async (
   program: anchor.Program<AnchorSolhedge>,
   sellers: PutOptionMakerInfo[],
   mint: anchor.web3.PublicKey
-) => {
+): Promise<Array<[PutOptionMakerInfo, Account]>> => {
   let conn = program.provider.connection
   let result: Array<[PutOptionMakerInfo, Account]> = []
   for (const seller of sellers) {
