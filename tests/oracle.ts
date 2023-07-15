@@ -92,10 +92,21 @@ export const updatePutOptionSettlePrice = async (
         throw new Error('Please wait at least 1 minute after maturity to settle option')
     }
     let maturityMinute = maturity - (maturity % 60)
-    let candles = await getCandlesticksBetween(vaultFactoryAccount.baseAsset.toString(), maturityMinute - 60, maturityMinute-1, CandleGranularity.ONE_MIN)
-    if (candles.length != 1) {
-        throw new Error(`Expected 1 candle, got ${candles.length}`)
+    console.log(`Will try to get one minute candles from ${maturityMinute - 60*60} and ${maturityMinute+1}`)
+    let candles = await getCandlesticksBetween(vaultFactoryAccount.baseAsset.toString(), maturityMinute - 60*60, maturityMinute+1, CandleGranularity.FIVE_MIN)
+
+    if (candles.length == 0) {
+        throw new Error(`Could not get candle stick price data around maturity`)
     }
+
+    //sorting by decreasing startTime
+    candles.sort((a, b) => (a.startTime > b.startTime ? -1 : 1))
+
+    //checking if candles are unexpectedly too old
+    if (maturityMinute - candles[0].startTime > MAX_STEPS_TO_TOO_OLD*granularityToSeconds(CandleGranularity.FIVE_MIN)) {
+        throw Error(`Cannot trust datafeed, candle stick data is sparse on maturity. Last startTime epoch was: ${candles[0].startTime}`)
+    }
+
     let settlePrice = candles[0]["close"]
     if (settlePrice == undefined || settlePrice <= 0) {
         throw new Error(`Invalid settle price: ${settlePrice}`)
