@@ -23,12 +23,14 @@ anchor_solhedge = "FoUvjSVZMDccmb2fCppM24N8yzVpPMKYn1h2CZDV7FFa"
 
 [programs.devnet]
 snake_minter_devnet = "GtZpJ4KSiNksGoz9gjRg4f1ywrGYy14ZjVwuFFvuFdPy"
+anchor_solhedge = "FoUvjSVZMDccmb2fCppM24N8yzVpPMKYn1h2CZDV7FFa"
 
 [registry]
 url = "https://api.apr.dev"
 
 [provider]
-cluster = "devnet"
+#cluster = "devnet"
+cluster = "localnet"
 wallet = "/home/srmq/.config/solana/id.json"
 
 [scripts]

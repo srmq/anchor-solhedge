@@ -15,8 +15,8 @@ const HELLO_MOON_BEARER = process.env.HELLO_MOON_BEARER;
 const ANCHOR_FREEZE_SECONDS = 30 * 60;
 const STEP_SAMPLE_SIZE = 30;
 
-// SHOULD BE false on mainnet!
-const DEVNET_MODE = true;
+// SHOULD BE false on mainnet and localnet!
+const DEVNET_MODE = false;
 
 var devnetMockMintTranslator = undefined
 if (DEVNET_MODE) {

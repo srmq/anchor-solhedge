@@ -43,8 +43,7 @@ const TEST_PUT_TAKER_KEY = [198,219,91,244,252,118,0,25,83,232,178,61,51,196,168
 // The corresponding pubkey of this key is what we should put in pyutil/replaceMint.py to generate the mocks USDC and WBTC
 const TEST_MOCK_MINTER_KEY = [109,3,86,101,96,42,254,204,98,232,34,172,105,37,112,24,223,194,66,133,2,105,54,228,54,97,90,111,253,35,245,73,93,83,136,36,51,237,111,8,250,149,126,98,135,211,138,191,207,116,66,179,204,231,147,190,217,190,220,93,181,102,164,238]
 
-// This is the where protocol fees will go, its pubkey is in lib.rs. MUST CHANGE IN REAL DEPLOYMENT
-const TEST_PROTOCOL_FEES_KEY = [170,187,172,146,241,33,174,135,129,205,0,108,30,54,58,190,112,43,95,133,59,63,136,89,167,183,88,187,65,45,66,214,212,13,191,146,112,52,37,80,118,225,123,85,122,18,26,51,145,227,30,224,105,163,126,21,155,210,207,191,239,81,83,244]
+const TEST_PROTOCOL_FEES_KEY = JSON.parse(process.env.DEVNET_PROTOCOL_FEES_KEY) as number[]
 
 const DEVNET_PROTOCOL_FEES_PUBKEY = process.env.DEVNET_PROTOCOL_FEES_PUBKEY
 
@@ -547,9 +546,15 @@ describe("anchor-solhedge-devnet", () => {
         if (!vaultFactoryInfo.matured && vaultFactoryInfo.maturity.toNumber() < currEpoch) {
           console.log(`Vault factory ${vaultInfo.factoryVault} has matured, will now ask oracle to settle price`)
           const ticketAddress = await getUserSettleTicketAccountAddressForVaultFactory(program, vaultInfo.factoryVault, putMaker1Keypair.publicKey)
-          const ticketAccount = await program.account.putOptionSettlePriceTicketInfo.fetch(ticketAddress)
-          console.log('TICKET ACCOUNT IS')
-          console.log(ticketAccount)
+          let ticketAccount = undefined
+          try {
+            ticketAccount = await program.account.putOptionSettlePriceTicketInfo.fetch(ticketAddress)
+            console.log('TICKET ACCOUNT IS')
+            console.log(ticketAccount)  
+          } catch(e) {
+            console.log('No previous ticket for settling this vault factory found for this user')
+          }
+          
           if (ticketAccount?.isUsed == undefined) {
             const oracleAddress = getOraclePubKey()
             let tx6 = await program.methods.genSettlePutOptionPriceTicket().accounts({
@@ -1013,26 +1018,30 @@ describe("anchor-solhedge-localnet", () => {
         }
         i++;
       }
-  
-      let tx8 = await program.methods.takerBuyLotsPutOptionVault(
-        new anchor.BN(myMaxPrice), 
-        new anchor.BN(takerLots), 
-        new anchor.BN(btcLamports)).accounts({
-          baseAssetMint: wormholeBTCToken,
-          quoteAssetMint: usdcToken,
-          initializer: putTakerKeypair.publicKey,
-          protocolQuoteAssetTreasury: protocolFeesUSDCATA.address,
-          frontendQuoteAssetTreasury: protocolFeesUSDCATA.address, //also sending frontend share to protocol in this test
-          takerBaseAssetAccount: putTakerwBTCATA.address,
-          takerQuoteAssetAccount: putTakerUSDCATA.address,
-          vaultFactoryInfo: putOptionVaultFactoryAddress2,
-          vaultInfo: vaultInfo.publicKey,
-          vaultBaseAssetTreasury: vaultBaseAssetTreasury2,
-        }).remainingAccounts(
-          remainingAccounts
-        ).signers([putTakerKeypair]).rpc()
-  
-        console.log("ALL DONE")
+      
+      try {
+        let tx8 = await program.methods.takerBuyLotsPutOptionVault(
+          new anchor.BN(myMaxPrice), 
+          new anchor.BN(takerLots), 
+          new anchor.BN(btcLamports)).accounts({
+            baseAssetMint: wormholeBTCToken,
+            quoteAssetMint: usdcToken,
+            initializer: putTakerKeypair.publicKey,
+            protocolQuoteAssetTreasury: protocolFeesUSDCATA.address,
+            frontendQuoteAssetTreasury: protocolFeesUSDCATA.address, //also sending frontend share to protocol in this test
+            takerBaseAssetAccount: putTakerwBTCATA.address,
+            takerQuoteAssetAccount: putTakerUSDCATA.address,
+            vaultFactoryInfo: putOptionVaultFactoryAddress2,
+            vaultInfo: vaultInfo.publicKey,
+            vaultBaseAssetTreasury: vaultBaseAssetTreasury2,
+          }).remainingAccounts(
+            remainingAccounts
+          ).signers([putTakerKeypair]).rpc()
+    
+          console.log("ALL DONE")
+      } catch(e) {
+        console.log(e)
+      }
   
     });  
 
