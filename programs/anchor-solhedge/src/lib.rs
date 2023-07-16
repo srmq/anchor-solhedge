@@ -43,11 +43,11 @@ const MAX_MATURITY_FUTURE_SECONDS: u64 = 30*24*60*60;
 // has not been exercised
 const EMERGENCY_MODE_GRACE_PERIOD: u64 = 15*24*60*60;
 
-// The corresponding private key is public on oracle.ts and on github! MUST CHANGE ON REAL DEPLOYMENT!
-const ORACLE_ADDRESS: Pubkey = pubkey!("9SBVhfXD73uNe9hQRLBBmzgY7PZUTQYGaa6aPM7Gqo68");
+// The corresponding private key should be on .env as DEVNET_ORACLE_KEY
+const ORACLE_ADDRESS: Pubkey = pubkey!("Fr9SMCeLe7GoLUQq6URuvZUgaCWtEkmD7d18H6DSn81t");
 
-// The corresponding private key is public on anchor-solhedge.ts and on github! MUST CHANGE ON REAL DEPLOYMENT!
-const PROTOCOL_FEES_ADDRESS: Pubkey = pubkey!("FGmbHBRXPe6gRUe9MzuRUVaCsnViUvvWpuyTD8sV8tuh");
+// The corresponding private key should be on .env as DEVNET_PROTOCOL_FEES_KEY
+const PROTOCOL_FEES_ADDRESS: Pubkey = pubkey!("Dku3bu5hqZVBXR39s6UW65nTPQ9rjevhhrfKhfpqgi8D");
 
 const PROTOCOL_TOTAL_FEES:f64 = 0.01;
 const FRONTEND_SHARE:f64 = 0.5;
@@ -320,7 +320,7 @@ pub mod anchor_solhedge {
         };
 
         if ctx.accounts.vault_factory_info.settled_price > ctx.accounts.vault_factory_info.strike {
-            // put option is not favorable to taker, will NOT be exercised
+            msg!("Put option is not favorable to taker, will NOT be exercised");
             // i.e. maker gets her deposited quote assets back
             result.settle_result = PutOptionSettleResult::NotExercised;
             // Proceed to transfer 
@@ -349,7 +349,7 @@ pub mod anchor_solhedge {
             result.quote_asset_transfer = ctx.accounts.put_option_maker_info.quote_asset_qty;
             result.base_asset_transfer = 0;
         } else {
-            // put option is favorable to taker, WILL be exercised
+            msg!("Put option is favorable to taker, WILL be exercised");
             // maker will sell up to the limit of ctx.accounts.put_option_maker_info.volume_sold
             // however as takers may have insufficiently funded their options, the maker
             // may eventually sell less, in a first settle first served base
@@ -371,6 +371,7 @@ pub mod anchor_solhedge {
                 ctx.accounts.vault_info.bonus_not_exercised = ctx.accounts.vault_info.bonus_not_exercised.checked_add(maker_bonus).unwrap();
             }
             if transfer_quote_asset > 0 {
+                msg!("Lucky maker! Will only be partially exercised!");
                 result.settle_result = PutOptionSettleResult::PartiallyExercised;
                 // Proceed to transfer 
                 let cpi_program = ctx.accounts.token_program.to_account_info();
@@ -396,6 +397,7 @@ pub mod anchor_solhedge {
                 token::transfer(token_transfer_context, transfer_quote_asset)?;
                 result.quote_asset_transfer = transfer_quote_asset;
             } else {
+                msg!("Maker will be fully exercised!");
                 result.settle_result = PutOptionSettleResult::FullyExercised;
                 result.quote_asset_transfer = 0;
             }
@@ -454,7 +456,7 @@ pub mod anchor_solhedge {
 
 
         if ctx.accounts.vault_factory_info.settled_price > ctx.accounts.vault_factory_info.strike {
-            // put option is not favorable to taker, will NOT be exercised
+            msg!("Put option is not favorable to taker, will NOT be exercised");
             // i.e. taker gets her deposited base assets back
             result.settle_result = PutOptionSettleResult::NotExercised;
             if ctx.accounts.put_option_taker_info.qty_deposited > 0 {
@@ -483,7 +485,7 @@ pub mod anchor_solhedge {
                 result.quote_asset_transfer = 0;
             }
         } else {
-            // put option is favorable to taker, WILL be exercised
+            msg!("Put option is favorable to taker, WILL be exercised");
             // i.e. sell qty_deposited at strike price
             result.settle_result = PutOptionSettleResult::PartiallyExercised;
             if ctx.accounts.put_option_taker_info.qty_deposited > 0 {

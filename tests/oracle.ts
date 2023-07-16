@@ -5,19 +5,33 @@ import axios from 'axios'
 import { cdfStdNormal, convertInterest, volatilitySquared } from "./stats";
 import * as token from "@solana/spl-token"
 import * as dotenv from "dotenv";
+import { CandleGranularity, TokenPrice, granularityToSeconds } from "./util";
+import { snakeDollarMintAddr, snakeBTCMintAddr } from "./snake-minter-devnet";
 
 dotenv.config()
 
-const ORACLE_KEY = [173, 200, 109, 11, 190, 65, 138, 51, 173, 27, 103, 62, 80, 143, 80, 89, 208, 134, 120, 55, 24, 150, 182, 249, 188, 107, 24, 73, 82, 133, 13, 249, 125, 80, 225, 215, 197, 38, 132, 128, 90, 96, 137, 231, 45, 60, 249, 165, 142, 68, 15, 175, 252, 121, 192, 200, 171, 55, 5, 47, 191, 201, 205, 209]
+const ORACLE_KEY = JSON.parse(process.env.DEVNET_ORACLE_KEY) as number[];
 const HELLO_MOON_BEARER = process.env.HELLO_MOON_BEARER;
 const ANCHOR_FREEZE_SECONDS = 30 * 60;
 const STEP_SAMPLE_SIZE = 30;
+
+// SHOULD BE false on mainnet!
+const DEVNET_MODE = true;
+
+var devnetMockMintTranslator = undefined
+if (DEVNET_MODE) {
+    devnetMockMintTranslator = []
+    devnetMockMintTranslator[snakeBTCMintAddr.toBase58()] = '3NZ9JMVBmGAqocybic2c7LQCJScmgsAZ6vQqTDzcqmJh'
+    devnetMockMintTranslator[snakeDollarMintAddr.toBase58()] = 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v'
+}
 
 //should decrease this (e.g. to 5*60) when hello moon give more reliable data
 const CURRENT_PRICE_MAX_DELAY_SECONDS = 20*60
 const RISK_FREE_YEARLY_RATE = 0.06;
 //should decrease this (e.g. to 3) when hello moon give more reliable data
 const MAX_STEPS_TO_TOO_OLD = 6;
+
+export const oracleAddr = new anchor.web3.PublicKey(process.env.DEVNET_ORACLE_PUBKEY)
 
 const axiosDefaultOptions = {
     baseURL: 'https://rest-api.hellomoon.io',
@@ -36,6 +50,10 @@ class SupportedAssets {
         this.assets = new Set<string>([
             '3NZ9JMVBmGAqocybic2c7LQCJScmgsAZ6vQqTDzcqmJh,EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v' // (Wormhole wBTC, USDC)
         ])
+        if (DEVNET_MODE) {
+            const mockPair = snakeBTCMintAddr.toBase58() + ',' + snakeDollarMintAddr.toBase58()
+            this.assets.add(mockPair)
+        }
     }
     public isSupported(baseAsset: anchor.web3.PublicKey, quoteAsset: anchor.web3.PublicKey): boolean {
         return this.assets.has(baseAsset.toBase58() + ',' + quoteAsset.toBase58())
@@ -74,10 +92,21 @@ export const updatePutOptionSettlePrice = async (
         throw new Error('Please wait at least 1 minute after maturity to settle option')
     }
     let maturityMinute = maturity - (maturity % 60)
-    let candles = await getCandlesticksBetween(vaultFactoryAccount.baseAsset.toString(), maturityMinute - 60, maturityMinute-1, CandleGranularity.ONE_MIN)
-    if (candles.length != 1) {
-        throw new Error(`Expected 1 candle, got ${candles.length}`)
+    console.log(`Will try to get one minute candles from ${maturityMinute - 60*60} and ${maturityMinute+1}`)
+    let candles = await getCandlesticksBetween(vaultFactoryAccount.baseAsset.toString(), maturityMinute - 60*60, maturityMinute+1, CandleGranularity.FIVE_MIN)
+
+    if (candles.length == 0) {
+        throw new Error(`Could not get candle stick price data around maturity`)
     }
+
+    //sorting by decreasing startTime
+    candles.sort((a, b) => (a.startTime > b.startTime ? -1 : 1))
+
+    //checking if candles are unexpectedly too old
+    if (maturityMinute - candles[0].startTime > MAX_STEPS_TO_TOO_OLD*granularityToSeconds(CandleGranularity.FIVE_MIN)) {
+        throw Error(`Cannot trust datafeed, candle stick data is sparse on maturity. Last startTime epoch was: ${candles[0].startTime}`)
+    }
+
     let settlePrice = candles[0]["close"]
     if (settlePrice == undefined || settlePrice <= 0) {
         throw new Error(`Invalid settle price: ${settlePrice}`)
@@ -182,14 +211,6 @@ export const updatePutOptionFairPrice = async (
     return tx
 }
 
-enum CandleGranularity {
-    ONE_MIN = "ONE_MIN",
-    FIVE_MIN = "FIVE_MIN",
-    ONE_HOUR = "ONE_HOUR",
-    ONE_DAY = "ONE_DAY",
-    ONE_WEEK = "ONE_WEEK"
-}
-
 function computePutOptionFairPrice(
     currentPrice: number, 
     strike: number, 
@@ -215,21 +236,12 @@ function computePutOptionFairPrice(
         return p
 }
 
-function granularityToSeconds(granularity: CandleGranularity): number {
-    switch(granularity) {
-        case CandleGranularity.ONE_MIN:
-            return 60;
-        case CandleGranularity.FIVE_MIN:
-            return 5*60;
-        case CandleGranularity.ONE_HOUR:
-            return 60*60;
-        case CandleGranularity.ONE_DAY:
-            return 24*60*60;
-        case CandleGranularity.ONE_WEEK:
-            return 7*24*60*60;
-        default:
-            throw Error(`Internal error, unknown granularity: ${granularity}`)
-    }
+export const lastKnownPrice = async (
+    mint: string
+): Promise<TokenPrice> => {
+    const lastCandle = await tokenLastMinuteCandle(mint)
+    const result = new TokenPrice(lastCandle)
+    return result
 }
 
 async function tokenLastMinuteCandle(mint: string) {
@@ -253,6 +265,9 @@ async function tokenLastMinuteCandle(mint: string) {
 
 async function getCandlesticksBetween(mint: string, startTimeEpoch: number, endTimeEpoch: number, granularity: CandleGranularity) {
     const endpoint = "/v0/token/candlesticks"
+    if (DEVNET_MODE) {
+        mint = devnetMockMintTranslator[mint]
+    }
     let postData = {
         "startTime": {
             "operator": "between",
@@ -291,7 +306,11 @@ async function getCandlesticksBetween(mint: string, startTimeEpoch: number, endT
 
 async function getCandlesticksFrom(mint: string, startTimeEpoch: number, granularity: CandleGranularity) {
     const endpoint = "/v0/token/candlesticks"
-    //console.log("Called getCandlesticksFrom")
+    if (DEVNET_MODE) {
+        mint = devnetMockMintTranslator[mint]
+        console.log("Mint will be translated to ", mint)
+    }
+    console.log("Called getCandlesticksFrom")
     let postData = {
         "startTime": {
             "operator": ">=",

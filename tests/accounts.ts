@@ -3,7 +3,39 @@ import { AnchorSolhedge } from "../target/types/anchor_solhedge";
 import { getAssociatedTokenAddress, Account } from "@solana/spl-token"
 import { bs58 } from "@coral-xyz/anchor/dist/cjs/utils/bytes";
 import * as token from "@solana/spl-token"
+import { Connection } from "@solana/web3.js";
+import * as borsh from "borsh";
 
+const getReturnLog = (confirmedTransaction) => {
+  const prefix = "Program return: ";
+  let log = confirmedTransaction.meta.logMessages.find((log) =>
+    log.startsWith(prefix)
+  );
+  log = log.slice(prefix.length);
+  const [key, data] = log.split(" ", 2);
+  const buffer = Buffer.from(data, "base64");
+  return [key, data, buffer];
+};  
+
+
+export const getMakerNextPutOptionVaultIdFromTx = async (
+  program: anchor.Program<AnchorSolhedge>, 
+  connection: Connection, 
+  txid: string
+): Promise<anchor.BN> => {
+      //inspired by example in https://github.com/coral-xyz/anchor/blob/master/tests/cpi-returns/tests/cpi-return.ts
+      let t = await connection.getTransaction(txid, {
+        maxSupportedTransactionVersion: 0,
+        commitment: "confirmed",
+      });
+      const [key, , buffer] = getReturnLog(t)
+      if(key != program.programId) {
+        throw new Error("Transaction is from another program")
+      }
+      const reader = new borsh.BinaryReader(buffer)
+      const vaultNumber = reader.readU64()
+      return vaultNumber
+}
 
 export const getVaultFactoryPdaAddress = async (
   program: anchor.Program<AnchorSolhedge>,
@@ -160,6 +192,67 @@ export const getUserMakerInfoAllVaults = async(
 
 }
 
+export const getUserTakerInfoAllVaults = async(
+  program: anchor.Program<AnchorSolhedge>,
+  userAddress: anchor.web3.PublicKey,
+) => {
+
+  const filter = [
+    {
+      memcmp: {
+        offset: 8 + // Discriminator
+                1 + // is_initialized: bool,
+                2 + // ord: u16
+                8 + // max_base_asset: u64
+                8 + // qty_deposited: u64
+                1, // is_settled: bool
+        bytes: userAddress.toBase58()
+      },
+    },
+  ]
+  const res = program.account.putOptionTakerInfo.all(filter)
+  return res
+
+}
+
+
+export const getUserTakerInfoForVault = async(
+  program: anchor.Program<AnchorSolhedge>,
+  vaultAddress: anchor.web3.PublicKey,
+  userAddress: anchor.web3.PublicKey,
+) => {
+
+  const filter = [
+    {
+      memcmp: {
+        offset: 8 + // Discriminator
+                1 + // is_initialized: bool
+                2 + // ord: u16
+                8 + // max_base_asset: u64
+                8 + // qty_deposited: u64
+                1 + // is_settled: bool
+                32, // owner: Pubkey
+        bytes: vaultAddress.toBase58()
+      },
+    },
+    {
+      memcmp: {
+        offset: 8 + // Discriminator
+                1 + // is_initialized: bool
+                2 + // ord: u16
+                8 + // max_base_asset: u64
+                8 + // qty_deposited: u64
+                1, // is_settled: bool
+        bytes: userAddress.toBase58()
+      },
+    }
+  ]
+  const res = program.account.putOptionTakerInfo.all(filter)
+
+  return res
+}
+
+
 export const getUserMakerInfoForVault = async(
   program: anchor.Program<AnchorSolhedge>,
   vaultAddress: anchor.web3.PublicKey,
@@ -198,15 +291,111 @@ export const getUserMakerInfoForVault = async(
   return res
 }
 
+export const getSellersAsRemainingAccounts = async (
+  wantedLots: number,
+  program: anchor.Program<AnchorSolhedge>,
+  sellers: PutOptionMakerInfo[],
+  vaultAccount?: any,
+  vaultFactoryAccount?: any
+) => {
+  if (vaultAccount == undefined) {
+    const vaultAddr = sellers[0].account.putOptionVault
+    vaultAccount = await program.account.putOptionVaultInfo.fetch(vaultAddr)  
+  }
+  if (vaultFactoryAccount == undefined) {
+    const vaultFactoryAddr = vaultAccount.factoryVault
+    vaultFactoryAccount = await program.account.putOptionVaultFactoryInfo.fetch(vaultFactoryAddr)  
+  }
+  const mint = vaultFactoryAccount.quoteAsset
+  let sellersAndATAS = await getMakerATAs(program, sellers, mint)
+  const quoteAssetByLot = (10**vaultAccount.lotSize)*vaultFactoryAccount.strike.toNumber()
+  const lotsInQuoteAsset = wantedLots*quoteAssetByLot
+  console.log(`${wantedLots} lots of ${10**vaultAccount.lotSize} at strike price ${vaultFactoryAccount.strike.toNumber()} mean ${lotsInQuoteAsset} in quote asset lamports`)
+  // will we get the first 4, and the 5st may be one later if the fourth does not complete
+  // enough demand
+  var i = 0
+  let remainingAccounts = []
+  for (const [putOptionMakerInfo, makerATA] of sellersAndATAS) {
+    let potentialLots = 0
+    if (i < 4) {
+      const remAccountInfo = {
+        pubkey: putOptionMakerInfo.publicKey,
+        isWritable: true,
+        isSigner: false
+      }
+      const remAccountATA = {
+        pubkey: makerATA.address,
+        isWritable: true,
+        isSigner: false
+      }
+      remainingAccounts.push(remAccountInfo);
+      remainingAccounts.push(remAccountATA);
+      const quoteAssetAvailable = putOptionMakerInfo.account.quoteAssetQty.toNumber() - putOptionMakerInfo.account.volumeSold.toNumber()
+      const userPotentialLots = Math.floor(quoteAssetAvailable/quoteAssetByLot)
+      potentialLots += userPotentialLots
+      console.log(`User ${i} has at most ${userPotentialLots} lots to sell`)
+    } else if (remainingAccounts.length >= 5) {
+      break;
+    } else if (i < sellersAndATAS.length-1){
+      const quoteAssetAvailable = putOptionMakerInfo.account.quoteAssetQty.toNumber() - putOptionMakerInfo.account.volumeSold.toNumber()
+      const userPotentialLots = Math.floor(quoteAssetAvailable/quoteAssetByLot)
+      if (potentialLots + userPotentialLots >= wantedLots) {
+        const remAccountInfo = {
+          pubkey: putOptionMakerInfo.publicKey,
+          isWritable: true,
+          isSigner: false
+        }
+        const remAccountATA = {
+          pubkey: makerATA.address,
+          isWritable: true,
+          isSigner: false
+        }
+        remainingAccounts.push(remAccountInfo);
+        remainingAccounts.push(remAccountATA);
+        potentialLots += userPotentialLots;
+        break; 
+      }
+    } else {
+      // last chance, this last one or the 5th
+      let quoteAssetAvailable = putOptionMakerInfo.account.quoteAssetQty.toNumber() - putOptionMakerInfo.account.volumeSold.toNumber()
+      let userPotentialLots = Math.floor(quoteAssetAvailable/quoteAssetByLot)
+      let makerPubkey = putOptionMakerInfo.publicKey
+      let ataPubkey = makerATA.address
+      if (potentialLots + userPotentialLots < wantedLots) {
+        makerPubkey = sellersAndATAS[4][0].publicKey
+        ataPubkey = sellersAndATAS[4][1].address
+        quoteAssetAvailable = sellersAndATAS[4][0].account.quoteAssetQty.toNumber() - sellersAndATAS[4][0].account.volumeSold.toNumber()
+        userPotentialLots = Math.floor(quoteAssetAvailable/quoteAssetByLot)
+      }
+      const remAccountInfo = {
+        pubkey: makerPubkey,
+        isWritable: true,
+        isSigner: false
+      }
+      const remAccountATA = {
+        pubkey: ataPubkey,
+        isWritable: true,
+        isSigner: false
+      }
+      remainingAccounts.push(remAccountInfo);
+      remainingAccounts.push(remAccountATA);
+      potentialLots += userPotentialLots;
+      break;
+    }
+    i++;
+  }
+  return remainingAccounts
+}
+
 export const getMakerATAs = async (
   program: anchor.Program<AnchorSolhedge>,
   sellers: PutOptionMakerInfo[],
   mint: anchor.web3.PublicKey
-) => {
+): Promise<Array<[PutOptionMakerInfo, Account]>> => {
   let conn = program.provider.connection
   let result: Array<[PutOptionMakerInfo, Account]> = []
   for (const seller of sellers) {
-    let sellerATAAddress = token.getAssociatedTokenAddressSync(mint, seller.account.owner, false)
+    let sellerATAAddress = await token.getAssociatedTokenAddress(mint, seller.account.owner, false)
     //verify if the account exist, we will not pay for its creation if not, just skip seller
     let sellerATA = await token.getAccount(conn, sellerATAAddress)
     //console.log('SELLER ATA')
