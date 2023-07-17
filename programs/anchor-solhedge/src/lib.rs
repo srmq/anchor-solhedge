@@ -22,13 +22,14 @@ use put_options::errors::PutOptionError;
 use put_options::data::PutOptionMakerInfo;
 
 use put_options::validators::*;
+use put_options::po_controller as po;
 
 mod put_options;
 
 declare_id!("FoUvjSVZMDccmb2fCppM24N8yzVpPMKYn1h2CZDV7FFa");
 
 //Options will be negotiated up to 30 minutes to maturity
-const FREEZE_SECONDS: u64 = 30*60;
+pub const FREEZE_SECONDS: u64 = 30*60;
 
 const LAMPORTS_FOR_UPDATE_FAIRPRICE_TICKET: u64 = 500000;
 const LAMPORTS_FOR_UPDATE_SETTLEPRICE_TICKET: u64 = 500000;
@@ -91,43 +92,14 @@ pub mod anchor_solhedge {
         ctx: Context<OracleUpdateSettlePrice>,
         settle_price: u64
     ) -> Result<()> {
-        require!(
-            settle_price > 0,
-            PutOptionError::PriceZero
-        );
-        let current_time = Clock::get().unwrap().unix_timestamp as u64;
-        require!(
-            ctx.accounts.vault_factory_info.maturity < current_time,
-            PutOptionError::MaturityTooLate
-        );
-
-        if !ctx.accounts.vault_factory_info.matured {
-            ctx.accounts.vault_factory_info.settled_price = settle_price;
-            ctx.accounts.vault_factory_info.matured = true;
-        }
-
-        ctx.accounts.update_ticket.is_used = true;
-
-        Ok(())
-
+        po::oracle_update_settle_price(ctx, settle_price)
     }
 
     pub fn oracle_update_price(
         ctx: Context<OracleUpdateFairPrice>,
         new_fair_price: u64
     ) -> Result<()> {
-        require!(
-            new_fair_price > 0,
-            PutOptionError::PriceZero
-        );
-
-        let current_time = Clock::get().unwrap().unix_timestamp as u64;
-        if ctx.accounts.vault_factory_info.maturity > current_time.checked_add(FREEZE_SECONDS).unwrap() {
-            ctx.accounts.vault_factory_info.last_fair_price = new_fair_price;
-            ctx.accounts.vault_factory_info.ts_last_fair_price = current_time;
-        }
-        ctx.accounts.update_ticket.is_used = true;
-        Ok(())
+        po::oracle_update_price(ctx, new_fair_price)
     }
 
     pub fn gen_settle_put_option_price_ticket(ctx: Context<GenSettlePutOptionPriceTicket>) -> Result<()> {
