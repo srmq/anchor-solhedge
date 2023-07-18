@@ -379,7 +379,7 @@ pub struct MakerCreatePutOptionVault<'info> {
 #[instruction(
     new_fair_price: u64
 )]
-pub struct OracleUpdateFairPrice<'info> {
+pub struct OracleUpdatePutOptionFairPrice<'info> {
     #[account(
         mut,
         constraint = vault_factory_info.strike > 0,
@@ -514,7 +514,7 @@ pub struct MakerNextPutOptionVaultId<'info> {
 #[instruction(
     settle_price: u64
 )]
-pub struct OracleUpdateSettlePrice<'info> {
+pub struct OracleUpdatePutOptionSettlePrice<'info> {
     #[account(
         mut,
         constraint = vault_factory_info.strike > 0,

@@ -117,7 +117,7 @@ export const updatePutOptionSettlePrice = async (
     const mintQuoteAsset = await token.getMint(conn, vaultFactoryAccount.quoteAsset)
     console.log(`The price at maturity (${d.toUTCString()}) was ${settlePrice/(10**(mintQuoteAsset.decimals))} dollars`)
     const oracleKeyPair = anchor.web3.Keypair.fromSecretKey(Uint8Array.from(ORACLE_KEY))
-    let tx = program.methods.oracleUpdateSettlePrice(new anchor.BN(settlePrice)).accounts({
+    let tx = program.methods.oracleUpdatePutOptionSettlePrice(new anchor.BN(settlePrice)).accounts({
         vaultFactoryInfo: vaultFactoryInfo,
         updateTicket: settleTicketAddress,
         ticketOwner: user,
@@ -202,7 +202,7 @@ export const updatePutOptionFairPrice = async (
     d.setUTCSeconds(maturityEpoch)
     console.log(`The fair price to the right to sell 1 bitcoin for ${vaultFactoryAccount.strike.toNumber()/(10**(mintQuoteAsset.decimals))} dollars at ${d.toUTCString()} is ${newPrice/(10**mintQuoteAsset.decimals)}`)
     const oracleKeyPair = anchor.web3.Keypair.fromSecretKey(Uint8Array.from(ORACLE_KEY))
-    let tx = program.methods.oracleUpdatePrice(new anchor.BN(newPrice)).accounts({
+    let tx = program.methods.oracleUpdatePutOptionPrice(new anchor.BN(newPrice)).accounts({
         vaultFactoryInfo: vaultFactoryInfo,
         updateTicket: ticketAddress,
         ticketOwner: user,
