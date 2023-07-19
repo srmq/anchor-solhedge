@@ -19,9 +19,13 @@ use anchor_lang::{prelude::*, solana_program};
 use solana_program::{pubkey, pubkey::Pubkey};
 
 use put_options::validators::*;
+use call_options::validators::*;
 use put_options::po_controller as po;
+use call_options::co_controller as co;
+
 
 mod put_options;
+mod call_options;
 
 declare_id!("FoUvjSVZMDccmb2fCppM24N8yzVpPMKYn1h2CZDV7FFa");
 
@@ -84,6 +88,7 @@ pub mod anchor_solhedge {
         Ok(())
     }
 
+    //----------- START PUT OPTIONS FAÇADE ------------------------------/
     pub fn oracle_update_put_option_settle_price(
         ctx: Context<OracleUpdatePutOptionSettlePrice>,
         settle_price: u64
@@ -173,12 +178,32 @@ pub mod anchor_solhedge {
     ) -> Result<()> {
         po::maker_create_put_option_vault(ctx, params, vault_id)
     }
+    //----------- END PUT OPTIONS FAÇADE ------------------------------/
+
+    //----------- START CALL OPTIONS FAÇADE ------------------------------/
+    pub fn maker_next_call_option_vault_id(ctx: Context<MakerNextCallOptionVaultId>,
+        params: MakerCreateCallOptionParams
+    ) -> Result<u64> {
+        co::maker_next_call_option_vault_id(ctx, params)
+    }
+    //----------- END CALL OPTIONS FAÇADE ------------------------------/
 
 }
 
 
 #[derive(AnchorSerialize, AnchorDeserialize, Clone, Copy)]
 pub struct MakerCreatePutOptionParams {
+    pub maturity: u64, 
+    pub strike: u64,
+    pub max_makers: u16,
+    pub max_takers: u16,
+    pub lot_size: i8, //10^lot_size, for instance 0 means 1; -1 means 0.1; 2 means 100
+    pub num_lots_to_sell: u64,
+    pub premium_limit: u64
+}
+
+#[derive(AnchorSerialize, AnchorDeserialize, Clone, Copy)]
+pub struct MakerCreateCallOptionParams {
     pub maturity: u64, 
     pub strike: u64,
     pub max_makers: u16,
