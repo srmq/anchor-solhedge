@@ -122,3 +122,78 @@ pub struct MakerCreateCallOptionVault<'info> {
     pub token_program: Program<'info, Token>,
     pub associated_token_program: Program<'info, AssociatedToken>,
 }
+
+#[derive(Accounts)]
+#[instruction(
+    num_lots_to_sell: u64,
+    premium_limit: u64
+)]
+pub struct MakerEnterCallOptionVault<'info> {
+    #[account(
+        constraint = vault_factory_info.strike > 0,
+        constraint = vault_factory_info.is_initialized == true,
+        constraint = vault_factory_info.matured == false,
+        constraint = vault_factory_info.base_asset == base_asset_mint.key(),
+        constraint = vault_factory_info.quote_asset == quote_asset_mint.key(),
+        constraint = vault_factory_info.emergency_mode == false
+    )]
+    pub vault_factory_info: Account<'info, CallOptionVaultFactoryInfo>,
+
+    #[account(
+        mut,
+        seeds=[
+            "CallOptionVaultInfo".as_bytes().as_ref(), 
+            vault_factory_info.key().as_ref(),
+            vault_info.ord.to_le_bytes().as_ref()
+        ], bump,
+        constraint = vault_info.is_makers_full == false,
+        constraint = vault_info.factory_vault == vault_factory_info.key(),
+    )]
+    pub vault_info: Account<'info, CallOptionVaultInfo>,
+
+    // mint for the base_asset
+    pub base_asset_mint: Account<'info, Mint>,
+
+    // mint for the quote asset
+    pub quote_asset_mint: Account<'info, Mint>,
+
+    #[account(
+        mut,
+        constraint = vault_base_asset_treasury.mint == base_asset_mint.key(), // Base asset mint
+        constraint = vault_base_asset_treasury.owner.key() == vault_info.key() // Authority set to vault PDA
+    )]
+    pub vault_base_asset_treasury: Box<Account<'info, TokenAccount>>,
+
+    #[account(
+        init,
+        seeds=[
+            "CallOptionMakerInfo".as_bytes().as_ref(),
+            vault_factory_info.key().as_ref(),
+            vault_info.ord.to_le_bytes().as_ref(), 
+            initializer.key().as_ref()
+        ],
+        bump,
+        payer = initializer,
+        space = std::mem::size_of::<CallOptionMakerInfo>() + 8
+    )]
+    pub call_option_maker_info: Account<'info, CallOptionMakerInfo>,
+
+    #[account(
+        mut,
+        constraint = maker_base_asset_account.owner.key() == initializer.key(),
+        constraint = maker_base_asset_account.mint == base_asset_mint.key()
+    )]
+    pub maker_base_asset_account: Box<Account<'info, TokenAccount>>,
+
+
+    // Check if initializer is signer, mut is required to reduce lamports (fees)
+    #[account(mut)]
+    pub initializer: Signer<'info>,
+    
+    // System Program requred for deduction of lamports (fees)
+    pub system_program: Program<'info, System>,
+    // Token Program required to call transfer instruction
+    pub token_program: Program<'info, Token>,
+    pub associated_token_program: Program<'info, AssociatedToken>,
+
+}

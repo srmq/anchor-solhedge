@@ -50,6 +50,8 @@ const TEST_PUT_TAKER_KEY = [198,219,91,244,252,118,0,25,83,232,178,61,51,196,168
 
 const TEST_CALL_MAKER_KEY = [223,213,193,53,156,60,130,254,205,49,112,44,52,72,232,5,125,35,122,49,199,54,17,93,178,243,206,107,167,174,251,89,23,1,101,73,149,218,109,106,30,26,112,132,101,81,192,248,142,207,82,231,106,25,255,162,87,37,185,91,158,112,242,210]
 
+const TEST_CALL_MAKER2_KEY = [135,38,149,130,53,194,212,234,171,1,139,229,29,85,32,193,243,6,149,195,225,139,233,179,6,29,170,121,87,229,88,48,67,213,147,114,107,206,212,88,39,107,14,98,185,48,251,248,100,125,48,148,207,88,233,166,7,185,86,43,73,183,160,22]
+
 // The corresponding pubkey of this key is what we should put in pyutil/replaceMint.py to generate the mocks USDC and WBTC
 const TEST_MOCK_MINTER_KEY = [109,3,86,101,96,42,254,204,98,232,34,172,105,37,112,24,223,194,66,133,2,105,54,228,54,97,90,111,253,35,245,73,93,83,136,36,51,237,111,8,250,149,126,98,135,211,138,191,207,116,66,179,204,231,147,190,217,190,220,93,181,102,164,238]
 
@@ -656,6 +658,8 @@ describe("anchor-solhedge-localnet", () => {
     const putMakerKeypair = keyPairFromSecret(TEST_PUT_MAKER_KEY)
     const putMaker2Keypair = keyPairFromSecret(TEST_PUT_MAKER2_KEY)
     const callMakerKeypair = keyPairFromSecret(TEST_CALL_MAKER_KEY)
+    const callMaker2Keypair = keyPairFromSecret(TEST_CALL_MAKER2_KEY)
+
   
     const putTakerKeypair = keyPairFromSecret(TEST_PUT_TAKER_KEY)
     const protocolFeesKeypair = keyPairFromSecret(TEST_PROTOCOL_FEES_KEY)
@@ -703,7 +707,12 @@ describe("anchor-solhedge-localnet", () => {
           airdropSolIfNeeded(
             callMakerKeypair,
             anchor.getProvider().connection
+          ),
+          airdropSolIfNeeded(
+            callMaker2Keypair,
+            anchor.getProvider().connection
           )
+
         ]
         await Promise.all(airdrops)
       } 
@@ -812,7 +821,41 @@ describe("anchor-solhedge-localnet", () => {
     
         const makerInfoForVault = await getUserMakerInfoForCallVault(program, vaultsForFactory[0].publicKey, callMakerKeypair.publicKey)
         assert.equal(makerInfoForVault[0].account.premiumLimit.toNumber(), vaultParams.premiumLimit.toNumber())        
-          
+
+        console.log('Now a second call maker will enter the same vault')
+        const callMaker2wBTCCATA = await createTokenAccount(conn, minterKeypair, wormholeBTCToken, callMaker2Keypair.publicKey)
+        const wbtcMint2Amount = 0.08
+        await mintTokens(conn, minterKeypair, wormholeBTCToken, callMaker2wBTCCATA.address, minterKeypair, wbtcMint2Amount)
+        console.log('Minted 0.08 wBTC to test call maker 2')
+        const callMaker2ATA = await token.getOrCreateAssociatedTokenAccount(conn, minterKeypair, wormholeBTCToken, callMaker2Keypair.publicKey)
+        const callOptionVaultFactoryAddress2 = await getCallOptionVaultFactoryPdaAddress(program, wormholeBTCToken, usdcToken, vaultParams.maturity, vaultParams.strike)
+        const vaultInfo = (await getVaultsForCallFactory(program, callOptionVaultFactoryAddress2))[0]
+        const vaultBaseAssetTreasury2 = await token.getAssociatedTokenAddress(wormholeBTCToken, vaultInfo.publicKey, true)
+        const vaultQuoteAssetTreasury2 = await token.getAssociatedTokenAddress(usdcToken, vaultInfo.publicKey, true)
+
+        try {
+          let tx3 = await program.methods.makerEnterCallOptionVault(new anchor.BN(40), new anchor.BN(0)).accounts({
+            initializer: callMaker2Keypair.publicKey,
+            vaultFactoryInfo: callOptionVaultFactoryAddress2,
+            vaultInfo: vaultInfo.publicKey,
+            vaultBaseAssetTreasury: vaultBaseAssetTreasury2,
+            baseAssetMint: wormholeBTCToken,
+            quoteAssetMint: usdcToken,
+            makerBaseAssetAccount: callMaker2ATA.address,
+          }).signers([callMaker2Keypair]).rpc()
+        } catch (e) {
+          console.log(e)
+          throw e
+        }
+        const makerInfos2 = await getAllCallMakerInfosForVault(program, vaultInfo.publicKey)
+        // console.log(makerInfos2)
+        assert.equal(makerInfos2.length, 2)
+    
+        let maker2InfoForVault = await getUserMakerInfoForCallVault(program, vaultInfo.publicKey, callMaker2Keypair.publicKey)
+        const qty40Lots = maker2InfoForVault[0].account.baseAssetQty.toNumber()
+        assert.isTrue(qty40Lots > 0)
+  
+        
     });
 
     it("Creating a put option maker vault", async () => {

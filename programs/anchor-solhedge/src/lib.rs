@@ -192,6 +192,13 @@ pub mod anchor_solhedge {
     ) -> Result<()> {
         co::maker_create_call_option_vault(ctx, params, vault_id)
     }
+
+    pub fn maker_enter_call_option_vault(ctx: Context<MakerEnterCallOptionVault>,     
+        num_lots_to_sell: u64,
+        premium_limit: u64
+    ) -> Result<()> {
+        co::maker_enter_call_option_vault(ctx, num_lots_to_sell, premium_limit)
+    }
     //----------- END CALL OPTIONS FAÇADE ------------------------------/
 
 }
