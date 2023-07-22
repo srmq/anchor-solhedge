@@ -1,6 +1,6 @@
 import * as anchor from "@coral-xyz/anchor";
 import { AnchorSolhedge } from "../target/types/anchor_solhedge";
-import { getUserSettleTicketAccountAddressForVaultFactory, getUserTicketAccountAddressForVaultFactory } from "./accounts";
+import { getUserSettleTicketAccountAddressForPutVaultFactory, getUserTicketAccountAddressForPutVaultFactory } from "./accounts";
 import axios from 'axios'
 import { cdfStdNormal, convertInterest, volatilitySquared } from "./stats";
 import * as token from "@solana/spl-token"
@@ -74,7 +74,7 @@ export const updatePutOptionSettlePrice = async (
     vaultFactoryInfo: anchor.web3.PublicKey,
     user: anchor.web3.PublicKey
 ): Promise<string> => {
-    const settleTicketAddress = await getUserSettleTicketAccountAddressForVaultFactory(program, vaultFactoryInfo, user)
+    const settleTicketAddress = await getUserSettleTicketAccountAddressForPutVaultFactory(program, vaultFactoryInfo, user)
     const ticketAccount = await program.account.putOptionSettlePriceTicketInfo.fetch(settleTicketAddress)
     if (ticketAccount == undefined || ticketAccount.isUsed) {
         throw new Error("Unexistent or used ticket")
@@ -131,7 +131,7 @@ export const updatePutOptionFairPrice = async (
     vaultFactoryInfo: anchor.web3.PublicKey,
     user: anchor.web3.PublicKey
 ): Promise<string> => {
-    const ticketAddress = await getUserTicketAccountAddressForVaultFactory(program, vaultFactoryInfo, user)
+    const ticketAddress = await getUserTicketAccountAddressForPutVaultFactory(program, vaultFactoryInfo, user)
     const ticketAccount = await program.account.putOptionUpdateFairPriceTicketInfo.fetch(ticketAddress)
     if (ticketAccount == undefined || ticketAccount.isUsed) {
         throw new Error("Unexistent or used ticket")

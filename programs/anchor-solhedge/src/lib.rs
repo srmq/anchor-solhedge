@@ -186,6 +186,12 @@ pub mod anchor_solhedge {
     ) -> Result<u64> {
         co::maker_next_call_option_vault_id(ctx, params)
     }
+
+    pub fn maker_create_call_option_vault(ctx: Context<MakerCreateCallOptionVault>,
+        params: MakerCreateCallOptionParams, vault_id: u64
+    ) -> Result<()> {
+        co::maker_create_call_option_vault(ctx, params, vault_id)
+    }
     //----------- END CALL OPTIONS FAÇADE ------------------------------/
 
 }
