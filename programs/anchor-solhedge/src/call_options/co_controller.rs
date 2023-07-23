@@ -222,3 +222,101 @@ pub fn maker_enter_call_option_vault(ctx: Context<MakerEnterCallOptionVault>,
 
     Ok(())
 }
+
+pub fn maker_adjust_position_call_option_vault(ctx: Context<MakerAdjustPositionCallOptionVault>,     
+    num_lots_to_sell: u64,
+    premium_limit: u64
+) -> Result<()> {
+
+    msg!("Entered maker_adjust_position_call_option_vault");
+    let current_time = Clock::get().unwrap().unix_timestamp as u64;
+    require!(
+        ctx.accounts.vault_factory_info.maturity > current_time.checked_add(FREEZE_SECONDS).unwrap(),
+        CallOptionError::MaturityTooEarly
+    );
+
+    require!(
+        ctx.accounts.call_option_maker_info.is_settled == false,
+        CallOptionError::IllegalState
+    );
+
+    let lot_multiplier:f64 = 10.0f64.powf(ctx.accounts.vault_info.lot_size as f64);
+    let lot_lamports_qty = lot_multiplier*10.0f64.powf(ctx.accounts.base_asset_mint.decimals as f64);
+    let rounded_lamports_qty = lot_lamports_qty.ceil() as u64;
+
+
+    let wanted_amount = rounded_lamports_qty.checked_mul(num_lots_to_sell).unwrap();
+
+
+    if wanted_amount > ctx.accounts.call_option_maker_info.base_asset_qty {
+        // Maker wants to increase her position in the vault
+
+        let increase_amount = wanted_amount.checked_sub(ctx.accounts.call_option_maker_info.base_asset_qty).unwrap();
+        // Proceed to transfer 
+        let cpi_program = ctx.accounts.token_program.to_account_info();
+        let cpi_accounts = Transfer {
+            from: ctx.accounts.maker_base_asset_account.to_account_info(),
+            to: ctx.accounts.vault_base_asset_treasury.to_account_info(),
+            authority: ctx.accounts.initializer.to_account_info(),
+        };
+        let token_transfer_context = CpiContext::new(cpi_program, cpi_accounts);
+
+        token::transfer(token_transfer_context, increase_amount)?;
+        msg!("Transferred {} base asset lamports to base asset treasury", increase_amount);
+        ctx.accounts.call_option_maker_info.base_asset_qty = ctx.accounts.call_option_maker_info.base_asset_qty.checked_add(increase_amount).unwrap();
+        require!(
+            ctx.accounts.call_option_maker_info.base_asset_qty.checked_sub(ctx.accounts.call_option_maker_info.volume_sold).unwrap() >= rounded_lamports_qty,
+            CallOptionError::IllegalState
+        );
+        ctx.accounts.call_option_maker_info.is_all_sold = false;
+        ctx.accounts.vault_info.makers_total_pending_sell = ctx.accounts.vault_info.makers_total_pending_sell.checked_add(increase_amount).unwrap();
+        ctx.accounts.vault_info.makers_total_pending_settle = ctx.accounts.vault_info.makers_total_pending_settle.checked_add(increase_amount).unwrap();
+
+    } else if wanted_amount < ctx.accounts.call_option_maker_info.base_asset_qty {
+        // Maker wants to decrease her position in the vault
+        let decrease_amount = ctx.accounts.call_option_maker_info.base_asset_qty - wanted_amount;
+        let max_decrease = ctx.accounts.call_option_maker_info.base_asset_qty - ctx.accounts.call_option_maker_info.volume_sold;
+        require!(
+            decrease_amount <= max_decrease,
+            CallOptionError::OversizedDecrease
+        );
+        // Proceed to transfer 
+        let cpi_program = ctx.accounts.token_program.to_account_info();
+        let cpi_accounts = Transfer {
+            from: ctx.accounts.vault_base_asset_treasury.to_account_info(),
+            to: ctx.accounts.maker_base_asset_account.to_account_info(),
+            authority: ctx.accounts.vault_info.to_account_info(),
+        };
+
+        // Preparing PDA signer
+        let auth_bump = *ctx.bumps.get("vault_info").unwrap();
+        let seeds = &[
+            "CallOptionVaultInfo".as_bytes().as_ref(), 
+            &ctx.accounts.vault_factory_info.key().to_bytes(),
+            &ctx.accounts.vault_info.ord.to_le_bytes(),
+            &[auth_bump],
+        ];
+        let signer = &[&seeds[..]];
+
+
+        let token_transfer_context = CpiContext::new_with_signer(cpi_program, cpi_accounts, signer);
+
+        token::transfer(token_transfer_context, decrease_amount)?;
+        msg!("Transferred {} base asset lamports from base asset treasury to user", decrease_amount);
+        ctx.accounts.call_option_maker_info.base_asset_qty = ctx.accounts.call_option_maker_info.base_asset_qty.checked_sub(decrease_amount).unwrap();
+        ctx.accounts.call_option_maker_info.is_all_sold = ctx.accounts.call_option_maker_info.base_asset_qty.checked_sub(ctx.accounts.call_option_maker_info.volume_sold).unwrap() < rounded_lamports_qty;
+        ctx.accounts.vault_info.makers_total_pending_sell = ctx.accounts.vault_info.makers_total_pending_sell.checked_sub(decrease_amount).unwrap();
+        ctx.accounts.vault_info.makers_total_pending_settle = ctx.accounts.vault_info.makers_total_pending_settle.checked_sub(decrease_amount).unwrap();
+    }
+
+    ctx.accounts.call_option_maker_info.premium_limit = premium_limit;    
+
+    require!(
+        ctx.accounts.call_option_maker_info.base_asset_qty >= ctx.accounts.call_option_maker_info.volume_sold,
+        CallOptionError::IllegalState
+    );
+
+
+    Ok(())
+
+}

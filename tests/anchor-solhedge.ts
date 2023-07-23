@@ -854,6 +854,34 @@ describe("anchor-solhedge-localnet", () => {
         let maker2InfoForVault = await getUserMakerInfoForCallVault(program, vaultInfo.publicKey, callMaker2Keypair.publicKey)
         const qty40Lots = maker2InfoForVault[0].account.baseAssetQty.toNumber()
         assert.isTrue(qty40Lots > 0)
+
+        // testing maker adjust position
+        let tx4 = await program.methods.makerAdjustPositionCallOptionVault(new anchor.BN(0), new anchor.BN(0)).accounts({        
+          initializer: callMaker2Keypair.publicKey,
+          vaultFactoryInfo: callOptionVaultFactoryAddress2,
+          vaultInfo: vaultInfo.publicKey,
+          vaultBaseAssetTreasury: vaultBaseAssetTreasury2,
+          callOptionMakerInfo: maker2InfoForVault[0].publicKey,
+          baseAssetMint: wormholeBTCToken,
+          quoteAssetMint: usdcToken,
+          makerBaseAssetAccount: callMaker2ATA.address,
+        }).signers([callMaker2Keypair]).rpc()
+        maker2InfoForVault = await getUserMakerInfoForCallVault(program, vaultInfo.publicKey, callMaker2Keypair.publicKey)
+        assert.equal(maker2InfoForVault[0].account.baseAssetQty.toNumber(), 0)
+    
+        let tx5 = await program.methods.makerAdjustPositionCallOptionVault(new anchor.BN(40), new anchor.BN(0)).accounts({
+          
+          initializer: callMaker2Keypair.publicKey,
+          vaultFactoryInfo: callOptionVaultFactoryAddress2,
+          vaultInfo: vaultInfo.publicKey,
+          vaultBaseAssetTreasury: vaultBaseAssetTreasury2,
+          callOptionMakerInfo: maker2InfoForVault[0].publicKey,
+          baseAssetMint: wormholeBTCToken,
+          quoteAssetMint: usdcToken,
+          makerBaseAssetAccount: callMaker2ATA.address,
+        }).signers([callMaker2Keypair]).rpc()
+        maker2InfoForVault = await getUserMakerInfoForCallVault(program, vaultInfo.publicKey, callMaker2Keypair.publicKey)
+        assert.equal(maker2InfoForVault[0].account.baseAssetQty.toNumber(), qty40Lots)
   
         
     });
