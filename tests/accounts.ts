@@ -147,6 +147,22 @@ export const getUserSettleTicketAccountAddressForPutVaultFactory = async (
   return ticketAccountAddress
 }
 
+export const getUserTicketAccountAddressForCallVaultFactory = async (
+  program: anchor.Program<AnchorSolhedge>,
+  vaultFactoryInfo: anchor.web3.PublicKey,
+  user: anchor.web3.PublicKey
+) => {
+  const [ticketAccountAddress, _ticketAccountBump] = anchor.web3.PublicKey.findProgramAddressSync(
+    [
+      Buffer.from(anchor.utils.bytes.utf8.encode("CallOptionUpdateTicketInfo")),
+      vaultFactoryInfo.toBuffer(),
+      user.toBuffer()
+    ],
+    program.programId
+  )
+  return ticketAccountAddress
+}
+
 
 export const getUserTicketAccountAddressForPutVaultFactory = async (
   program: anchor.Program<AnchorSolhedge>,

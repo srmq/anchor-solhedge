@@ -33,11 +33,12 @@ import {
   getVaultsForCallFactory,
   getUserMakerInfoAllCallVaults,
   getAllCallMakerInfosForVault,
-  getUserMakerInfoForCallVault
+  getUserMakerInfoForCallVault,
+  getUserTicketAccountAddressForCallVaultFactory
 
 } from "./accounts";
 import * as borsh from "borsh";
-import { getOraclePubKey, _testInitializeOracleAccount, updatePutOptionFairPrice, lastKnownPrice } from "./oracle";
+import { getOraclePubKey, _testInitializeOracleAccount, updatePutOptionFairPrice, lastKnownPrice, updateCallOptionFairPrice } from "./oracle";
 import { snakeBTCMintAddr, snakeDollarMintAddr, mintSnakeDollarTo, mintSnakeBTCTo } from "./snake-minter-devnet";
 import { oracleAddr, updatePutOptionSettlePrice } from "./oracle";
 
@@ -47,6 +48,8 @@ const TEST_PUT_MAKER_KEY = [7,202,200,249,141,19,80,240,20,148,116,158,237,253,2
 const TEST_PUT_MAKER2_KEY = [58,214,126,90,15,29,80,114,170,70,234,58,244,144,25,23,110,1,6,19,176,12,232,59,55,64,56,53,60,187,246,157,140,117,187,255,239,135,134,192,94,254,53,137,53,27,99,244,218,86,207,59,22,189,242,164,155,104,68,250,161,179,108,4]
 
 const TEST_PUT_TAKER_KEY = [198,219,91,244,252,118,0,25,83,232,178,61,51,196,168,151,77,1,142,9,164,80,29,63,76,216,213,85,99,185,71,113,36,61,101,115,203,92,102,70,200,37,98,228,234,240,155,7,144,0,244,71,236,104,22,131,143,216,47,244,151,205,246,245]
+
+const TEST_CALL_TAKER_KEY = [34,70,126,122,54,85,192,254,177,96,78,120,138,157,162,99,28,229,168,9,218,245,12,223,5,123,110,251,146,64,80,78,38,119,242,115,10,183,83,73,233,36,67,234,180,208,112,249,135,92,67,180,230,128,155,183,154,4,12,21,2,232,205,209]
 
 const TEST_CALL_MAKER_KEY = [223,213,193,53,156,60,130,254,205,49,112,44,52,72,232,5,125,35,122,49,199,54,17,93,178,243,206,107,167,174,251,89,23,1,101,73,149,218,109,106,30,26,112,132,101,81,192,248,142,207,82,231,106,25,255,162,87,37,185,91,158,112,242,210]
 
@@ -662,6 +665,7 @@ describe("anchor-solhedge-localnet", () => {
 
   
     const putTakerKeypair = keyPairFromSecret(TEST_PUT_TAKER_KEY)
+    const callTakerKeypair = keyPairFromSecret(TEST_CALL_TAKER_KEY)
     const protocolFeesKeypair = keyPairFromSecret(TEST_PROTOCOL_FEES_KEY)
   
     const usdcToken = new anchor.web3.PublicKey("EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v")
@@ -711,8 +715,11 @@ describe("anchor-solhedge-localnet", () => {
           airdropSolIfNeeded(
             callMaker2Keypair,
             anchor.getProvider().connection
+          ),
+          airdropSolIfNeeded(
+            callTakerKeypair,
+            anchor.getProvider().connection
           )
-
         ]
         await Promise.all(airdrops)
       } 
@@ -882,6 +889,31 @@ describe("anchor-solhedge-localnet", () => {
         }).signers([callMaker2Keypair]).rpc()
         maker2InfoForVault = await getUserMakerInfoForCallVault(program, vaultInfo.publicKey, callMaker2Keypair.publicKey)
         assert.equal(maker2InfoForVault[0].account.baseAssetQty.toNumber(), qty40Lots)
+  
+        //Starting call taker simulation
+        const oracleAddress = getOraclePubKey()
+
+        const ticketAddress = await getUserTicketAccountAddressForCallVaultFactory(program, callOptionVaultFactoryAddress2, callTakerKeypair.publicKey)
+    
+        console.log("Call taker before paying oracle SOL balance is", await anchor.getProvider().connection.getBalance(callTakerKeypair.publicKey)/ anchor.web3.LAMPORTS_PER_SOL)
+        console.log("Oracle SOL balance is", await anchor.getProvider().connection.getBalance(oracleAddress)/ anchor.web3.LAMPORTS_PER_SOL)
+    
+    
+        let tx6 = await program.methods.genUpdateCallOptionFairPriceTicket().accounts({
+          vaultFactoryInfo: callOptionVaultFactoryAddress2,
+          initializer: callTakerKeypair.publicKey,
+          oracleWallet: oracleAddress,
+          callOptionFairPriceTicket: ticketAddress
+        }).signers([callTakerKeypair]).rpc()
+    
+        console.log("Call taker after paying oracle SOL balance is", await anchor.getProvider().connection.getBalance(callTakerKeypair.publicKey)/ anchor.web3.LAMPORTS_PER_SOL)    
+        console.log("Oracle SOL balance is", await anchor.getProvider().connection.getBalance(oracleAddress)/ anchor.web3.LAMPORTS_PER_SOL)
+    
+        let tx7 = await updateCallOptionFairPrice(program, callOptionVaultFactoryAddress2, callTakerKeypair.publicKey)
+        console.log("Oracle SOL balance after updating fair price is", await anchor.getProvider().connection.getBalance(oracleAddress)/ anchor.web3.LAMPORTS_PER_SOL)
+        console.log("Call taker after oracle using ticket SOL balance is", await anchor.getProvider().connection.getBalance(callTakerKeypair.publicKey)/ anchor.web3.LAMPORTS_PER_SOL)        
+        let updatedVaultFactory = await program.account.callOptionVaultFactoryInfo.fetch(callOptionVaultFactoryAddress2)
+        console.log('Updated call price is ', updatedVaultFactory.lastFairPrice.toNumber())
   
         
     });

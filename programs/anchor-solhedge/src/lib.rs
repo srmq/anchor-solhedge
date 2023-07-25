@@ -206,6 +206,17 @@ pub mod anchor_solhedge {
     ) -> Result<()> {
         co::maker_adjust_position_call_option_vault(ctx, num_lots_to_sell, premium_limit)
     }
+
+    pub fn gen_update_call_option_fair_price_ticket(ctx: Context<GenUpdateCallOptionFairPriceTicket>) -> Result<()> {
+        co::gen_update_call_option_fair_price_ticket(ctx)
+    }
+
+    pub fn oracle_update_call_option_price(
+        ctx: Context<OracleUpdateCallOptionFairPrice>,
+        new_fair_price: u64
+    ) -> Result<()> {
+        co::oracle_update_call_option_price(ctx, new_fair_price)
+    }
     //----------- END CALL OPTIONS FAÇADE ------------------------------/
 
 }

@@ -1,10 +1,11 @@
-use anchor_lang::prelude::*;
+use anchor_lang::{prelude::*, system_program};
 use crate::call_options::validators::*;
 use crate::MakerCreateCallOptionParams;
 use crate::call_options::errors::CallOptionError;
 use crate::{
     FREEZE_SECONDS, 
     MAX_MATURITY_FUTURE_SECONDS,
+    LAMPORTS_FOR_UPDATE_FAIRPRICE_TICKET,
 };
 use anchor_spl::token::{self, Transfer};
 
@@ -319,4 +320,49 @@ pub fn maker_adjust_position_call_option_vault(ctx: Context<MakerAdjustPositionC
 
     Ok(())
 
+}
+
+pub fn gen_update_call_option_fair_price_ticket(ctx: Context<GenUpdateCallOptionFairPriceTicket>) -> Result<()> {
+    require!(
+        ctx.accounts.call_option_fair_price_ticket.is_used == false,
+        CallOptionError::UsedUpdateTicket
+    );
+
+    let current_time = Clock::get().unwrap().unix_timestamp as u64;
+    require!(
+        ctx.accounts.vault_factory_info.maturity > current_time.checked_add(FREEZE_SECONDS).unwrap(),
+        CallOptionError::MaturityTooEarly
+    );
+
+
+    msg!("Started transferring lamports to oracle");
+    let oracle_fee_transfer_cpi_context = CpiContext::new(
+        ctx.accounts.system_program.to_account_info(),
+        system_program::Transfer {
+            from: ctx.accounts.initializer.to_account_info(),
+            to: ctx.accounts.oracle_wallet.to_account_info()
+        }
+    );
+    system_program::transfer(oracle_fee_transfer_cpi_context, LAMPORTS_FOR_UPDATE_FAIRPRICE_TICKET)?;
+    msg!("Finished transferring lamports to oracle");
+
+    Ok(())
+}
+
+pub fn oracle_update_call_option_price(
+    ctx: Context<OracleUpdateCallOptionFairPrice>,
+    new_fair_price: u64
+) -> Result<()> {
+    require!(
+        new_fair_price > 0,
+        CallOptionError::PriceZero
+    );
+
+    let current_time = Clock::get().unwrap().unix_timestamp as u64;
+    if ctx.accounts.vault_factory_info.maturity > current_time.checked_add(FREEZE_SECONDS).unwrap() {
+        ctx.accounts.vault_factory_info.last_fair_price = new_fair_price;
+        ctx.accounts.vault_factory_info.ts_last_fair_price = current_time;
+    }
+    ctx.accounts.update_ticket.is_used = true;
+    Ok(())
 }

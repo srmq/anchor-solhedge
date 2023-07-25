@@ -49,3 +49,9 @@ pub struct CallOptionMakerInfo {
     pub owner: Pubkey,
     pub call_option_vault: Pubkey
 }
+
+#[account]
+pub struct CallOptionUpdateFairPriceTicketInfo {
+    pub is_used: bool,
+    pub factory_vault: Pubkey
+}
