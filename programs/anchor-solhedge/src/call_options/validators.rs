@@ -4,11 +4,12 @@ use crate::call_options::data::{
     CallOptionVaultFactoryInfo,
     CallOptionVaultInfo,
     CallOptionMakerInfo,
-    CallOptionUpdateFairPriceTicketInfo
+    CallOptionUpdateFairPriceTicketInfo,
+    CallOptionTakerInfo
 };
 use anchor_spl::token::{Mint, Token, TokenAccount};
 use anchor_spl::associated_token::AssociatedToken;
-use crate::ORACLE_ADDRESS;
+use crate::{PROTOCOL_FEES_ADDRESS, ORACLE_ADDRESS};
 
 #[derive(Accounts)]
 #[instruction(
@@ -345,5 +346,97 @@ pub struct OracleUpdateCallOptionFairPrice<'info> {
 
     // System Program requred for deduction of lamports (fees)
     pub system_program: Program<'info, System>
+
+}
+
+#[derive(Accounts)]
+#[instruction(
+    max_fair_price: u64,
+    num_lots_to_buy: u64,
+    initial_funding: u64
+)]
+pub struct TakerBuyLotsCallOptionVault<'info> {
+    #[account(
+        constraint = vault_factory_info.strike > 0,
+        constraint = vault_factory_info.is_initialized == true,
+        constraint = vault_factory_info.matured == false,
+        constraint = vault_factory_info.base_asset == base_asset_mint.key(),
+        constraint = vault_factory_info.quote_asset == quote_asset_mint.key(),
+        constraint = vault_factory_info.emergency_mode == false
+    )]
+    pub vault_factory_info: Account<'info, CallOptionVaultFactoryInfo>,
+
+    #[account(
+        mut,
+        seeds=[
+            "CallOptionVaultInfo".as_bytes().as_ref(), 
+            vault_factory_info.key().as_ref(),
+            vault_info.ord.to_le_bytes().as_ref()
+        ], bump,
+        constraint = vault_info.factory_vault == vault_factory_info.key(),
+    )]
+    pub vault_info: Account<'info, CallOptionVaultInfo>,
+
+    #[account(
+        init_if_needed,
+        seeds=[
+            "CallOptionTakerInfo".as_bytes().as_ref(),
+            vault_factory_info.key().as_ref(),
+            vault_info.ord.to_le_bytes().as_ref(), 
+            initializer.key().as_ref()
+        ],
+        bump,
+        payer = initializer,
+        space = std::mem::size_of::<CallOptionTakerInfo>() + 8,
+        constraint = !call_option_taker_info.is_settled
+    )]
+    pub call_option_taker_info: Account<'info, CallOptionTakerInfo>,
+
+
+    // mint for the base_asset
+    pub base_asset_mint: Account<'info, Mint>,
+
+    // mint for the quote asset
+    pub quote_asset_mint: Account<'info, Mint>,
+
+    #[account(
+        mut,
+        constraint = vault_quote_asset_treasury.mint == quote_asset_mint.key(), // Quote asset mint
+        constraint = vault_quote_asset_treasury.owner.key() == vault_info.key() // Authority set to vault PDA
+    )]
+    pub vault_quote_asset_treasury: Box<Account<'info, TokenAccount>>,
+
+    // to pay the option premium (fair price) and fund call option
+    #[account(
+        mut,
+        constraint = taker_quote_asset_account.owner.key() == initializer.key(),
+        constraint = taker_quote_asset_account.mint == quote_asset_mint.key()
+    )]
+    pub taker_quote_asset_account: Box<Account<'info, TokenAccount>>,
+
+    // protocol fees will be paid here
+    #[account(
+        mut,
+        constraint = protocol_quote_asset_treasury.owner.key() == PROTOCOL_FEES_ADDRESS,
+        constraint = protocol_quote_asset_treasury.mint == quote_asset_mint.key()
+    )]
+    pub protocol_quote_asset_treasury: Box<Account<'info, TokenAccount>>,
+
+    // frontend fees will be paid here
+    #[account(
+        mut,
+        constraint = frontend_quote_asset_treasury.mint == quote_asset_mint.key()
+    )]
+    pub frontend_quote_asset_treasury: Box<Account<'info, TokenAccount>>,
+
+    // Check if initializer is signer, mut is required to reduce lamports (fees)
+    #[account(mut)]
+    pub initializer: Signer<'info>,
+    
+    // System Program requred for deduction of lamports (fees)
+    pub system_program: Program<'info, System>,
+    // Token Program required to call transfer instruction
+    pub token_program: Program<'info, Token>,
+    pub associated_token_program: Program<'info, AssociatedToken>,
 
 }

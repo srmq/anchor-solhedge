@@ -571,6 +571,37 @@ export const getPutMakerATAs = async (
   return result
 }
 
+export const getCallSellersInVault = async (
+  program: anchor.Program<AnchorSolhedge>,
+  vaultAddress: anchor.web3.PublicKey,
+  fairPrice: number,
+  slippageTolerance: number
+): Promise<CallOptionMakerInfo[]> => {
+  console.log(`fairPrice in getCallSellersInVault is ${fairPrice}`)
+  if (!slippageTolerance || slippageTolerance <= 0.0) {
+    throw new Error(`slippageTolerance has to be correctly defined, cannot be ${slippageTolerance}`)
+  }
+  if (!fairPrice || fairPrice <= 0.0) {
+    throw new Error(`fairPrice should be greater than zero, cannot be ${fairPrice}`)
+  }
+  if (!Number.isSafeInteger(fairPrice)) {
+    throw new Error(`fairPrice should be an integer in price lamports, cannot be ${fairPrice}`)
+  }
+
+  let chainResults = await getAllCallMakerInfosForVault(program, vaultAddress)
+  chainResults = chainResults.filter(makerInfo => 
+    !makerInfo.account.isAllSold
+    && makerInfo.account.premiumLimit.toNumber() <= Math.floor((1.0+slippageTolerance)*fairPrice))
+  
+  chainResults.sort((a, b) => (a.account.ord as number) - (b.account.ord as number))
+  let result: CallOptionMakerInfo[] = []
+  chainResults.forEach(chainResult => {
+    result.push(new CallOptionMakerInfo(chainResult))
+  });
+  return result
+}
+
+
 export const getPutSellersInVault = async (
   program: anchor.Program<AnchorSolhedge>,
   vaultAddress: anchor.web3.PublicKey,
@@ -607,6 +638,7 @@ export class PutOptionMakerInfo {
     ord: number
     quoteAssetQty: anchor.BN
     volumeSold: anchor.BN
+    isAllSold: boolean
     isSettled: boolean
     premiumLimit: anchor.BN
     owner: anchor.web3.PublicKey
@@ -619,6 +651,7 @@ export class PutOptionMakerInfo {
       ord: number | anchor.BN
       quoteAssetQty: anchor.BN
       volumeSold: anchor.BN
+      isAllSold: boolean
       isSettled: boolean
       premiumLimit: anchor.BN
       owner: anchor.web3.PublicKey
@@ -630,6 +663,7 @@ export class PutOptionMakerInfo {
       ord: new anchor.BN(params.account.ord).toNumber(),
       quoteAssetQty: params.account.quoteAssetQty,
       volumeSold: params.account.volumeSold,
+      isAllSold: params.account.isAllSold,
       isSettled: params.account.isSettled,
       premiumLimit: params.account.premiumLimit,
       owner: params.account.owner,
@@ -637,6 +671,47 @@ export class PutOptionMakerInfo {
     }
   }
 }
+
+export class CallOptionMakerInfo {
+  publicKey: anchor.web3.PublicKey
+  account: {
+    ord: number
+    baseAssetQty: anchor.BN
+    volumeSold: anchor.BN
+    isAllSold: boolean
+    isSettled: boolean
+    premiumLimit: anchor.BN
+    owner: anchor.web3.PublicKey
+    callOptionVault: anchor.web3.PublicKey
+  }
+
+  constructor(params: {
+    publicKey: anchor.web3.PublicKey
+    account: {
+      ord: number | anchor.BN
+      baseAssetQty: anchor.BN
+      volumeSold: anchor.BN
+      isAllSold: boolean
+      isSettled: boolean
+      premiumLimit: anchor.BN
+      owner: anchor.web3.PublicKey
+      callOptionVault: anchor.web3.PublicKey
+    }    
+  }){
+    this.publicKey = params.publicKey
+    this.account = {
+      ord: new anchor.BN(params.account.ord).toNumber(),
+      baseAssetQty: params.account.baseAssetQty,
+      volumeSold: params.account.volumeSold,
+      isAllSold: params.account.isAllSold,
+      isSettled: params.account.isSettled,
+      premiumLimit: params.account.premiumLimit,
+      owner: params.account.owner,
+      callOptionVault: params.account.callOptionVault
+    }
+  }
+}
+
 
 
 export const getAllPutMakerInfosForVault = async(

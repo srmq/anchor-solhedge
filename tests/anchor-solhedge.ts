@@ -34,7 +34,8 @@ import {
   getUserMakerInfoAllCallVaults,
   getAllCallMakerInfosForVault,
   getUserMakerInfoForCallVault,
-  getUserTicketAccountAddressForCallVaultFactory
+  getUserTicketAccountAddressForCallVaultFactory,
+  getCallSellersInVault,
 
 } from "./accounts";
 import * as borsh from "borsh";
@@ -913,7 +914,18 @@ describe("anchor-solhedge-localnet", () => {
         console.log("Oracle SOL balance after updating fair price is", await anchor.getProvider().connection.getBalance(oracleAddress)/ anchor.web3.LAMPORTS_PER_SOL)
         console.log("Call taker after oracle using ticket SOL balance is", await anchor.getProvider().connection.getBalance(callTakerKeypair.publicKey)/ anchor.web3.LAMPORTS_PER_SOL)        
         let updatedVaultFactory = await program.account.callOptionVaultFactoryInfo.fetch(callOptionVaultFactoryAddress2)
-        console.log('Updated call price is ', updatedVaultFactory.lastFairPrice.toNumber())
+        const fairPrice = updatedVaultFactory.lastFairPrice.toNumber()
+        console.log('Updated call price is ', fairPrice)
+
+        const slippageTolerance = 0.05      
+        let sellers = await getCallSellersInVault(program, vaultInfo.publicKey, fairPrice, slippageTolerance)
+        assert.equal(sellers.length, 2)
+
+        const callTakerUSDCATA = await createTokenAccount(conn, minterKeypair, usdcToken, callTakerKeypair.publicKey)
+      
+        const usdcMintAmountTaker = 10000
+        await mintTokens(conn, minterKeypair, usdcToken, callTakerUSDCATA.address, minterKeypair, usdcMintAmountTaker)
+        console.log('Minted 10k usdc to test call taker, in order to pay call option premium and fund her option')
   
         
     });
@@ -1160,79 +1172,7 @@ describe("anchor-solhedge-localnet", () => {
       const lotsInQuoteAsset = takerLots*quoteAssetByLot
       console.log(`${takerLots} lots of ${10**vaultInfo.account.lotSize} at strike price ${updatedVaultFactory.strike.toNumber()} mean ${lotsInQuoteAsset} in USDC lamports`)
       
-      // will we get the first 4, and the 5st may be one later if the fourth does not complete
-      // enough demand
-      var i = 0
-      let remainingAccounts = []
-      for (const [putOptionMakerInfo, makerATA] of sellersAndATAS) {
-        let potentialLots = 0
-        if (i < 4) {
-          const remAccountInfo = {
-            pubkey: putOptionMakerInfo.publicKey,
-            isWritable: true,
-            isSigner: false
-          }
-          const remAccountATA = {
-            pubkey: makerATA.address,
-            isWritable: true,
-            isSigner: false
-          }
-          remainingAccounts.push(remAccountInfo);
-          remainingAccounts.push(remAccountATA);
-          const quoteAssetAvailable = putOptionMakerInfo.account.quoteAssetQty.toNumber() - putOptionMakerInfo.account.volumeSold.toNumber()
-          const userPotentialLots = Math.floor(quoteAssetAvailable/quoteAssetByLot)
-          potentialLots += userPotentialLots
-          console.log(`User ${i} has at most ${userPotentialLots} lots to sell`)
-        } else if (remainingAccounts.length >= 5) {
-          break;
-        } else if (i < sellersAndATAS.length-1){
-          const quoteAssetAvailable = putOptionMakerInfo.account.quoteAssetQty.toNumber() - putOptionMakerInfo.account.volumeSold.toNumber()
-          const userPotentialLots = Math.floor(quoteAssetAvailable/quoteAssetByLot)
-          if (potentialLots + userPotentialLots >= takerLots) {
-            const remAccountInfo = {
-              pubkey: putOptionMakerInfo.publicKey,
-              isWritable: true,
-              isSigner: false
-            }
-            const remAccountATA = {
-              pubkey: makerATA.address,
-              isWritable: true,
-              isSigner: false
-            }
-            remainingAccounts.push(remAccountInfo);
-            remainingAccounts.push(remAccountATA);
-            potentialLots += userPotentialLots;
-            break; 
-          }
-        } else {
-          // last chance, this last one or the 5th
-          let quoteAssetAvailable = putOptionMakerInfo.account.quoteAssetQty.toNumber() - putOptionMakerInfo.account.volumeSold.toNumber()
-          let userPotentialLots = Math.floor(quoteAssetAvailable/quoteAssetByLot)
-          let makerPubkey = putOptionMakerInfo.publicKey
-          let ataPubkey = makerATA.address
-          if (potentialLots + userPotentialLots < takerLots) {
-            makerPubkey = sellersAndATAS[4][0].publicKey
-            ataPubkey = sellersAndATAS[4][1].address
-            quoteAssetAvailable = sellersAndATAS[4][0].account.quoteAssetQty.toNumber() - sellersAndATAS[4][0].account.volumeSold.toNumber()
-            userPotentialLots = Math.floor(quoteAssetAvailable/quoteAssetByLot)
-          }
-          const remAccountInfo = {
-            pubkey: makerPubkey,
-            isWritable: true,
-            isSigner: false
-          }
-          const remAccountATA = {
-            pubkey: ataPubkey,
-            isWritable: true,
-            isSigner: false
-          }
-          remainingAccounts.push(remAccountInfo);
-          remainingAccounts.push(remAccountATA);
-          potentialLots += userPotentialLots;
-          break;
-        }
-        i++;
-      }
+      const remainingAccounts = await getPutSellersAsRemainingAccounts(takerLots, program, sellers)
       
       try {
         let tx8 = await program.methods.takerBuyLotsPutOptionVault(

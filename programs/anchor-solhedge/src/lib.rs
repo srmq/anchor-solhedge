@@ -70,6 +70,14 @@ pub mod anchor_solhedge {
     }
 
     #[derive(AnchorSerialize, AnchorDeserialize)]
+    pub struct TakerBuyLotsCallOptionReturn {
+        pub num_lots_bought: u64,
+        pub price: u64,
+        pub funding_added: u64
+    }
+
+
+    #[derive(AnchorSerialize, AnchorDeserialize)]
     pub struct PutOptionSettleReturn {
         pub settle_result: PutOptionSettleResult,
         pub base_asset_transfer: u64,
@@ -216,6 +224,14 @@ pub mod anchor_solhedge {
         new_fair_price: u64
     ) -> Result<()> {
         co::oracle_update_call_option_price(ctx, new_fair_price)
+    }
+
+    pub fn taker_buy_lots_call_option_vault<'info>(ctx: Context<'_, '_, '_, 'info, TakerBuyLotsCallOptionVault<'info>>,
+    max_fair_price: u64,
+    num_lots_to_buy: u64,
+    initial_funding: u64
+    ) -> Result<TakerBuyLotsCallOptionReturn> {
+        co::taker_buy_lots_call_option_vault(ctx, max_fair_price, num_lots_to_buy, initial_funding)
     }
     //----------- END CALL OPTIONS FAÇADE ------------------------------/
 

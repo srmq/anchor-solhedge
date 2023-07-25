@@ -50,8 +50,27 @@ pub struct CallOptionMakerInfo {
     pub call_option_vault: Pubkey
 }
 
+impl CallOptionMakerInfo {
+    pub fn from<'info>(info: &AccountInfo<'info>) -> Account<'info, Self> {
+        Account::try_from(info).unwrap()
+    }
+}
+
+
 #[account]
 pub struct CallOptionUpdateFairPriceTicketInfo {
     pub is_used: bool,
     pub factory_vault: Pubkey
+}
+
+#[account]
+pub struct CallOptionTakerInfo {
+    pub is_initialized: bool,
+
+    pub ord: u16,
+    pub max_quote_asset: u64,        // the max amount in quote asset lamports she may fund based on how many options she bought
+    pub qty_deposited: u64,         // how much she has funded (qty_deposited <= max_quote_asset)
+    pub is_settled: bool,           // if the taker has already got her tokens after maturity
+    pub owner: Pubkey,
+    pub call_option_vault: Pubkey
 }
