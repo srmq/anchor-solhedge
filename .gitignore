@@ -7,3 +7,4 @@ node_modules
 test-ledger
 **/.venv
 .env
+yarn-error.log

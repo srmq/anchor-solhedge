@@ -1,0 +1,5 @@
+{
+    "rust-analyzer.linkedProjects": [
+        "./programs/anchor-solhedge/Cargo.toml"
+    ]
+}

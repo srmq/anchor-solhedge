@@ -7,6 +7,22 @@ import {
 	TransactionMessage,
 } from "@solana/web3.js";
 
+export function keyPairFromSecret(secret: number[]): Keypair {
+	const secretKey = Uint8Array.from(secret)
+	const keypair = Keypair.fromSecretKey(secretKey)
+	//console.log(keypair.publicKey.toString())
+	return keypair
+}
+  
+
+export const isLocalnet = (conn : Connection): boolean => {
+	const ep = conn.rpcEndpoint.toLowerCase()
+	return ep.startsWith("http://0.0.0.0") ||
+	  ep.startsWith("http://localhost") ||
+	  ep.startsWith("http://127.0.0.1")
+}
+  
+
 export async function sendTransactionV0(
 	connection: Connection,
 	instructions: TransactionInstruction[],
@@ -69,3 +85,49 @@ export async function printAddressLookupTable(
 		console.log(`   Index: ${i}  Address: ${address.toBase58()}`);
 	}
 }
+
+export enum CandleGranularity {
+    ONE_MIN = "ONE_MIN",
+    FIVE_MIN = "FIVE_MIN",
+    ONE_HOUR = "ONE_HOUR",
+    ONE_DAY = "ONE_DAY",
+    ONE_WEEK = "ONE_WEEK"
+}
+
+export const granularityToSeconds = (granularity: CandleGranularity): number => {
+    switch(granularity) {
+        case CandleGranularity.ONE_MIN:
+            return 60;
+        case CandleGranularity.FIVE_MIN:
+            return 5*60;
+        case CandleGranularity.ONE_HOUR:
+            return 60*60;
+        case CandleGranularity.ONE_DAY:
+            return 24*60*60;
+        case CandleGranularity.ONE_WEEK:
+            return 7*24*60*60;
+        default:
+            throw Error(`Internal error, unknown granularity: ${granularity}`)
+    }
+}
+
+
+
+export class TokenPrice {
+	mint: string
+	price: number
+	ts: number
+  
+	constructor(candle: {
+	  mint: string
+	  granularity: CandleGranularity
+	  startTime: number
+	  close: number
+	}){
+	  this.mint = candle.mint
+	  this.price = candle.close
+	  const addToStart = granularityToSeconds(candle.granularity)
+	  this.ts = candle.startTime + addToStart
+	}
+  }
+  

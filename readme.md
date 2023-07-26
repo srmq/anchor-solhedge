@@ -18,7 +18,7 @@ for that vault (for instance, a vault may be of lots of $10^{-3}$ wBTC) and
 is associated to the option sellers (makers) as well as the option buyers 
 (takers) for that vault. Each vault support up to $2^{16}$ makers and $2^{16}$ takers.
 When a user enters in a vault (as a maker or taker) only the accounts to support
-her entrance are created by him, so the transaction costs are very low for everyone.
+her entrance are created by her, so the transaction costs are very low for everyone.
 
 When a user enters a put option vault as a maker, this means that (at this moment) she
 wants to sell an option taker the right to sell her wBTC at strike price at a given time in the future. Suppose
@@ -81,7 +81,15 @@ assets back (as if the option should not been exercised).
 
 You can run a simulation of the implemented code by running `anchor test`. You will need to define a `.env` with a `HELLO_MOON_BEARER` variable with your API key, as in the `.env.example`.
 
-You can see an execution of `anchor test` at this link: https://youtu.be/SLUw9Yh3vig 
+You can see an execution of `anchor test` at this link: https://youtu.be/SLUw9Yh3vig
+
+## Devnet development
+
+All the developments listed above were done and tested on localnet. There we used the real mint addresses of USDC and wBTC (wormhole),
+by deploying the files `usdc-mock.json` and `wbtc-mock.json` in our local test validator (see `Anchor.toml`). 
+The next step was to migrate and test on devnet. This is being done at the branch [`devnet-devel`](https://github.com/srmq/anchor-solhedge/tree/devnet-devel). As I could no longer mint USDC and wBTC on devnet, I coded a faucet of
+fake USDC and wBTC (see program `snake-minter-devnet`), that mints [SnakeDollar](https://solscan.io/token/BJvndCYS1eMf1bg6vyJCjZiUEFcnZ5DeZKJiyZCjwN6K?cluster=devnet) and [SnakeBTC](https://solscan.io/token/6p728Y98qrSrvjRQmmvRLqa3JJ4P9RyLwbJ42DHxG7tP?cluster=devnet), that will be used in 
+devnet as mock replacements for USDC and wBTC (tests on `snake-minter-devnet.ts`). The code that creates the token is at the directory `snake-tokens`.
 
 ## Economics
 
