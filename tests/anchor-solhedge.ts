@@ -36,6 +36,7 @@ import {
   getUserMakerInfoForCallVault,
   getUserTicketAccountAddressForCallVaultFactory,
   getCallSellersInVault,
+  getCallSellersAsRemainingAccounts
 
 } from "./accounts";
 import * as borsh from "borsh";
@@ -738,6 +739,7 @@ describe("anchor-solhedge-localnet", () => {
       const conn = anchor.getProvider().connection
       const wBTCMintAmountTaker = 0.02
       const callMakerwBTCATA = await createTokenAccount(conn, minterKeypair, wormholeBTCToken, callMakerKeypair.publicKey)
+      await createTokenAccount(conn, minterKeypair, usdcToken, callMakerKeypair.publicKey) // creating USDC ATA to receive premium
       await mintTokens(conn, minterKeypair, wormholeBTCToken, callMakerwBTCATA.address, minterKeypair, wBTCMintAmountTaker)
       console.log(`Minted ${wBTCMintAmountTaker} wBTC to test call maker, he will create a call option from here`)
       let currEpoch = Math.floor(Date.now()/1000)
@@ -836,6 +838,7 @@ describe("anchor-solhedge-localnet", () => {
         await mintTokens(conn, minterKeypair, wormholeBTCToken, callMaker2wBTCCATA.address, minterKeypair, wbtcMint2Amount)
         console.log('Minted 0.08 wBTC to test call maker 2')
         const callMaker2ATA = await token.getOrCreateAssociatedTokenAccount(conn, minterKeypair, wormholeBTCToken, callMaker2Keypair.publicKey)
+        await createTokenAccount(conn, minterKeypair, usdcToken, callMaker2Keypair.publicKey) // creating USDC ATA to receive premium
         const callOptionVaultFactoryAddress2 = await getCallOptionVaultFactoryPdaAddress(program, wormholeBTCToken, usdcToken, vaultParams.maturity, vaultParams.strike)
         const vaultInfo = (await getVaultsForCallFactory(program, callOptionVaultFactoryAddress2))[0]
         const vaultBaseAssetTreasury2 = await token.getAssociatedTokenAddress(wormholeBTCToken, vaultInfo.publicKey, true)
@@ -921,11 +924,40 @@ describe("anchor-solhedge-localnet", () => {
         let sellers = await getCallSellersInVault(program, vaultInfo.publicKey, fairPrice, slippageTolerance)
         assert.equal(sellers.length, 2)
 
+
         const callTakerUSDCATA = await createTokenAccount(conn, minterKeypair, usdcToken, callTakerKeypair.publicKey)
       
         const usdcMintAmountTaker = 10000
         await mintTokens(conn, minterKeypair, usdcToken, callTakerUSDCATA.address, minterKeypair, usdcMintAmountTaker)
         console.log('Minted 10k usdc to test call taker, in order to pay call option premium and fund her option')
+  
+        //Lets suppose put taker slippage tolerance is 5%
+        const myMaxPrice = Math.floor(updatedVaultFactory.lastFairPrice.toNumber()*1.05)
+        const protocolFeesUSDCATA = await createTokenAccount(conn, minterKeypair, usdcToken, protocolFeesKeypair.publicKey)
+        const lotPrice = (updatedVaultFactory.strike.toNumber() + updatedVaultFactory.lastFairPrice.toNumber()*1.05)*(10**vaultInfo.account.lotSize)
+        const takerLots = Math.floor(usdcMintAmountTaker*(10**mintInfoUSDC.decimals)/lotPrice)
+        
+        const remainingAccounts = await getCallSellersAsRemainingAccounts(takerLots, program, sellers)
+        
+        console.log(`Call taker will try to buy ${takerLots} lots`)
+        let tx8 = await program.methods.takerBuyLotsCallOptionVault(
+          new anchor.BN(myMaxPrice), 
+          new anchor.BN(takerLots), 
+          new anchor.BN(0)).accounts({
+            baseAssetMint: wormholeBTCToken,
+            quoteAssetMint: usdcToken,
+            initializer: callTakerKeypair.publicKey,
+            protocolQuoteAssetTreasury: protocolFeesUSDCATA.address,
+            frontendQuoteAssetTreasury: protocolFeesUSDCATA.address, //also sending frontend share to protocol in this test
+            takerQuoteAssetAccount: callTakerUSDCATA.address,
+            vaultFactoryInfo: callOptionVaultFactoryAddress2,
+            vaultInfo: vaultInfo.publicKey,
+            vaultQuoteAssetTreasury: vaultQuoteAssetTreasury2,
+          }).remainingAccounts(
+            remainingAccounts
+          ).signers([callTakerKeypair]).rpc()
+    
+          console.log("ALL DONE")
   
         
     });
