@@ -649,6 +649,16 @@ describe("anchor-solhedge-devnet", () => {
   }
 })
 
+async function confirm(tx: string, connection: anchor.web3.Connection) {
+  const { blockhash, lastValidBlockHeight } = await connection.getLatestBlockhash();
+  await connection.confirmTransaction({
+    blockhash,
+    lastValidBlockHeight,
+    signature: tx
+  }, 'singleGossip');
+}
+
+
 describe("anchor-solhedge-localnet", () => {
   //console.log(anchor.AnchorProvider.env())
   
@@ -938,12 +948,13 @@ describe("anchor-solhedge-localnet", () => {
         const takerLots = Math.floor(usdcMintAmountTaker*(10**mintInfoUSDC.decimals)/lotPrice)
         
         const remainingAccounts = await getCallSellersAsRemainingAccounts(takerLots, program, sellers)
+        const quoteAssetInitialFund = 0
         
         console.log(`Call taker will try to buy ${takerLots} lots`)
         let tx8 = await program.methods.takerBuyLotsCallOptionVault(
           new anchor.BN(myMaxPrice), 
           new anchor.BN(takerLots), 
-          new anchor.BN(0)).accounts({
+          new anchor.BN(quoteAssetInitialFund)).accounts({
             baseAssetMint: wormholeBTCToken,
             quoteAssetMint: usdcToken,
             initializer: callTakerKeypair.publicKey,
@@ -956,6 +967,48 @@ describe("anchor-solhedge-localnet", () => {
           }).remainingAccounts(
             remainingAccounts
           ).signers([callTakerKeypair]).rpc()
+          await confirm(tx8, conn);
+          const tr = await conn.getTransaction(tx8, {
+            maxSupportedTransactionVersion: 0,
+            commitment: "confirmed",
+          });
+
+          // console.log('>>>>> tr IS')
+          // console.log(tr)
+          const [tx8Key, tx8Data, tx8Buffer] = getReturnLog(tr);
+          // console.log('>>>> tx8Key is')
+          // console.log(tx8Key)
+          // console.log('>>>> programId is')
+          // console.log(program.programId)
+          // console.log('>>>tx8Data is')
+          // console.log(tx8Data)
+
+          assert.equal(tx8Key, program.programId.toBase58());
+      
+          // Check for matching log on receive side
+          let receiveLog = tr.meta.logMessages.find(
+            (log) => log.includes(tx8Data, log.indexOf('Program return: '))
+          );
+          assert(receiveLog !== undefined);
+          // Deserialize the struct and validate
+          class Assignable {
+            constructor(properties) {
+              Object.keys(properties).map((key) => {
+                this[key] = properties[key];
+              });
+            }
+          }
+          class Data extends Assignable {}
+          const schema = new Map([
+            [Data, { kind: "struct", fields: [["numLotsBought", "u64"], ["price", "u64"], ["fundingAdded", "u64"]] }],
+          ]);
+          const deserialized = borsh.deserialize(schema, Data, tx8Buffer);
+          // @ts-ignore
+          assert.equal(updatedVaultFactory.lastFairPrice.toNumber(), deserialized.price)
+          // @ts-ignore
+          assert.equal(deserialized.fundingAdded, quoteAssetInitialFund)
+          // @ts-ignore
+          console.log(`Call taker bought ${deserialized.numLotsBought} lots with premium at ${deserialized.price} and added ${deserialized.fundingAdded} as funding`)
     
           console.log("ALL DONE")
   
@@ -1198,8 +1251,8 @@ describe("anchor-solhedge-localnet", () => {
       assert.equal(tokenAccountTestFetch.address, protocolFeesUSDCATA.address)
   
       let sellersAndATAS = await getPutMakerATAs(program, sellers, usdcToken)
-      console.log("SELLERS AND ATAS")
-      console.log(sellersAndATAS)
+      // console.log("SELLERS AND ATAS")
+      // console.log(sellersAndATAS)
       const quoteAssetByLot = (10**vaultInfo.account.lotSize)*updatedVaultFactory.strike.toNumber()
       const lotsInQuoteAsset = takerLots*quoteAssetByLot
       console.log(`${takerLots} lots of ${10**vaultInfo.account.lotSize} at strike price ${updatedVaultFactory.strike.toNumber()} mean ${lotsInQuoteAsset} in USDC lamports`)
