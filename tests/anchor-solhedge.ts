@@ -10,26 +10,37 @@ import { SnakeMinterDevnet } from "../target/types/snake_minter_devnet";
 import { assert, expect } from "chai";
 import { 
   MakerCreatePutOptionParams, 
-  getVaultFactoryPdaAddress, 
-  getVaultDerivedPdaAddresses, 
-  getMakerVaultAssociatedAccountAddress,
-  getAllMaybeNotMaturedFactories,
+  MakerCreateCallOptionParams,
+  getPutOptionVaultFactoryPdaAddress,
+  getCallOptionVaultFactoryPdaAddress,
+  getPutOptionVaultDerivedPdaAddresses, 
+  getPutMakerVaultAssociatedAccountAddress,
+  getCallOptionVaultDerivedPdaAddresses,
+  getAllMaybeNotMaturedPutFactories,
   getVaultsForPutFactory,
-  getUserMakerInfoAllVaults,
-  getAllMakerInfosForVault,
-  getUserMakerInfoForVault,
-  getSellersInVault,
-  getUserTicketAccountAddressForVaultFactory,
-  getUserSettleTicketAccountAddressForVaultFactory,
-  getMakerATAs,
+  getUserMakerInfoAllPutVaults,
+  getAllPutMakerInfosForVault,
+  getUserMakerInfoForPutVault,
+  getPutSellersInVault,
+  getUserTicketAccountAddressForPutVaultFactory,
+  getUserSettleTicketAccountAddressForPutVaultFactory,
+  getPutMakerATAs,
   getMakerNextPutOptionVaultIdFromTx,
-  getUserTakerInfoForVault,
-  getSellersAsRemainingAccounts,
-  getUserTakerInfoAllVaults
+  getUserTakerInfoForPutVault,
+  getPutSellersAsRemainingAccounts,
+  getUserTakerInfoAllPutVaults,
+  getAllMaybeNotMaturedCallFactories,
+  getVaultsForCallFactory,
+  getUserMakerInfoAllCallVaults,
+  getAllCallMakerInfosForVault,
+  getUserMakerInfoForCallVault,
+  getUserTicketAccountAddressForCallVaultFactory,
+  getCallSellersInVault,
+  getCallSellersAsRemainingAccounts
 
 } from "./accounts";
 import * as borsh from "borsh";
-import { getOraclePubKey, _testInitializeOracleAccount, updatePutOptionFairPrice, lastKnownPrice } from "./oracle";
+import { getOraclePubKey, _testInitializeOracleAccount, updatePutOptionFairPrice, lastKnownPrice, updateCallOptionFairPrice } from "./oracle";
 import { snakeBTCMintAddr, snakeDollarMintAddr, mintSnakeDollarTo, mintSnakeBTCTo } from "./snake-minter-devnet";
 import { oracleAddr, updatePutOptionSettlePrice } from "./oracle";
 
@@ -40,11 +51,16 @@ const TEST_PUT_MAKER2_KEY = [58,214,126,90,15,29,80,114,170,70,234,58,244,144,25
 
 const TEST_PUT_TAKER_KEY = [198,219,91,244,252,118,0,25,83,232,178,61,51,196,168,151,77,1,142,9,164,80,29,63,76,216,213,85,99,185,71,113,36,61,101,115,203,92,102,70,200,37,98,228,234,240,155,7,144,0,244,71,236,104,22,131,143,216,47,244,151,205,246,245]
 
+const TEST_CALL_TAKER_KEY = [34,70,126,122,54,85,192,254,177,96,78,120,138,157,162,99,28,229,168,9,218,245,12,223,5,123,110,251,146,64,80,78,38,119,242,115,10,183,83,73,233,36,67,234,180,208,112,249,135,92,67,180,230,128,155,183,154,4,12,21,2,232,205,209]
+
+const TEST_CALL_MAKER_KEY = [223,213,193,53,156,60,130,254,205,49,112,44,52,72,232,5,125,35,122,49,199,54,17,93,178,243,206,107,167,174,251,89,23,1,101,73,149,218,109,106,30,26,112,132,101,81,192,248,142,207,82,231,106,25,255,162,87,37,185,91,158,112,242,210]
+
+const TEST_CALL_MAKER2_KEY = [135,38,149,130,53,194,212,234,171,1,139,229,29,85,32,193,243,6,149,195,225,139,233,179,6,29,170,121,87,229,88,48,67,213,147,114,107,206,212,88,39,107,14,98,185,48,251,248,100,125,48,148,207,88,233,166,7,185,86,43,73,183,160,22]
+
 // The corresponding pubkey of this key is what we should put in pyutil/replaceMint.py to generate the mocks USDC and WBTC
 const TEST_MOCK_MINTER_KEY = [109,3,86,101,96,42,254,204,98,232,34,172,105,37,112,24,223,194,66,133,2,105,54,228,54,97,90,111,253,35,245,73,93,83,136,36,51,237,111,8,250,149,126,98,135,211,138,191,207,116,66,179,204,231,147,190,217,190,220,93,181,102,164,238]
 
-// This is the where protocol fees will go, its pubkey is in lib.rs. MUST CHANGE IN REAL DEPLOYMENT
-const TEST_PROTOCOL_FEES_KEY = [170,187,172,146,241,33,174,135,129,205,0,108,30,54,58,190,112,43,95,133,59,63,136,89,167,183,88,187,65,45,66,214,212,13,191,146,112,52,37,80,118,225,123,85,122,18,26,51,145,227,30,224,105,163,126,21,155,210,207,191,239,81,83,244]
+const TEST_PROTOCOL_FEES_KEY = JSON.parse(process.env.DEVNET_PROTOCOL_FEES_KEY) as number[]
 
 const DEVNET_PROTOCOL_FEES_PUBKEY = process.env.DEVNET_PROTOCOL_FEES_PUBKEY
 
@@ -273,7 +289,7 @@ describe("anchor-solhedge-devnet", () => {
           premiumLimit: new anchor.BN(0)  
         }
       )
-      const putOptionVaultFactoryAddress = await getVaultFactoryPdaAddress(program, snakeBTCMintAddr, snakeDollarMintAddr, vaultParams.maturity, vaultParams.strike)
+      const putOptionVaultFactoryAddress = await getPutOptionVaultFactoryPdaAddress(program, snakeBTCMintAddr, snakeDollarMintAddr, vaultParams.maturity, vaultParams.strike)
 
       const tx = await program.methods.makerNextPutOptionVaultId(vaultParams).accounts({
         initializer: putMaker1Keypair.publicKey,
@@ -290,7 +306,7 @@ describe("anchor-solhedge-devnet", () => {
         putOptionVaultAddress, 
         vaultBaseAssetTreasury, 
         vaultQuoteAssetTreasury
-      } = await getVaultDerivedPdaAddresses(program, putOptionVaultFactoryAddress, snakeBTCMintAddr, snakeDollarMintAddr, vaultNumber)
+      } = await getPutOptionVaultDerivedPdaAddresses(program, putOptionVaultFactoryAddress, snakeBTCMintAddr, snakeDollarMintAddr, vaultNumber)
 
       const putMaker1SnakeDollarATA = await token.getOrCreateAssociatedTokenAccount(
         anchor.getProvider().connection,
@@ -299,7 +315,6 @@ describe("anchor-solhedge-devnet", () => {
         putMaker1Keypair.publicKey
       )
   
-
       var tx2 = await program.methods.makerCreatePutOptionVault(vaultParams, vaultNumber).accounts({
         initializer: putMaker1Keypair.publicKey,
         vaultFactoryInfo: putOptionVaultFactoryAddress,
@@ -312,7 +327,7 @@ describe("anchor-solhedge-devnet", () => {
       }).signers([putMaker1Keypair]).rpc()
       console.log("Transaction for creating PutOptionVault is ", tx2)
 
-      const vaultFactories = await getAllMaybeNotMaturedFactories(program)
+      const vaultFactories = await getAllMaybeNotMaturedPutFactories(program)
       let myFactory = undefined
       for (let vaultFactory of vaultFactories) {
         if (
@@ -334,18 +349,18 @@ describe("anchor-solhedge-devnet", () => {
       assert.equal(vaultsForFactory[0].account.maxMakers, vaultParams.maxMakers)
       assert.equal(vaultsForFactory[0].account.maxTakers, vaultParams.maxTakers)
   
-      const userInfoInVault = await getUserMakerInfoAllVaults(program, putMaker1Keypair.publicKey)
+      const userInfoInVault = await getUserMakerInfoAllPutVaults(program, putMaker1Keypair.publicKey)
       assert.equal(userInfoInVault[0].account.premiumLimit.toNumber(), vaultParams.premiumLimit.toNumber())
   
-      const makerInfos = await getAllMakerInfosForVault(program, vaultsForFactory[0].publicKey)
+      const makerInfos = await getAllPutMakerInfosForVault(program, vaultsForFactory[0].publicKey)
       assert.equal(makerInfos[0].account.premiumLimit.toNumber(), vaultParams.premiumLimit.toNumber())
   
-      const makerInfoForVault = await getUserMakerInfoForVault(program, vaultsForFactory[0].publicKey, putMaker1Keypair.publicKey)
+      const makerInfoForVault = await getUserMakerInfoForPutVault(program, vaultsForFactory[0].publicKey, putMaker1Keypair.publicKey)
       assert.equal(makerInfoForVault[0].account.premiumLimit.toNumber(), vaultParams.premiumLimit.toNumber())
     });
 
     xit(`Now a second Putmaker, ${putMaker2Keypair.publicKey} will try to enter existing PutOptionVaults`, async () => {
-      const vaultFactories = await getAllMaybeNotMaturedFactories(program)
+      const vaultFactories = await getAllMaybeNotMaturedPutFactories(program)
       console.log('Number of maybe not matured factories: ', vaultFactories.length)
       for (let vaultFactory of vaultFactories) {
         const maturity = vaultFactory.account.maturity.toNumber()
@@ -359,7 +374,7 @@ describe("anchor-solhedge-devnet", () => {
           const vaults = await getVaultsForPutFactory(program, vaultFactory.publicKey)
           for (let vault of vaults) {
             if (vault.account.isMakersFull) continue
-            if ((await getUserMakerInfoForVault(program, vault.publicKey, putMaker2Keypair.publicKey)).length > 0) {
+            if ((await getUserMakerInfoForPutVault(program, vault.publicKey, putMaker2Keypair.publicKey)).length > 0) {
               continue
             }
             const minEntry = Math.ceil((10**vault.account.lotSize)*vaultFactory.account.strike.toNumber())
@@ -368,7 +383,7 @@ describe("anchor-solhedge-devnet", () => {
               putOptionVaultAddress, 
               vaultBaseAssetTreasury, 
               vaultQuoteAssetTreasury
-            } = await getVaultDerivedPdaAddresses(program, vaultFactory.publicKey, vaultFactory.account.baseAsset, vaultFactory.account.quoteAsset, vault.account.ord)
+            } = await getPutOptionVaultDerivedPdaAddresses(program, vaultFactory.publicKey, vaultFactory.account.baseAsset, vaultFactory.account.quoteAsset, vault.account.ord)
       
             if (myBalance >= minEntry) {
               const numLots = Math.floor(myBalance/minEntry)
@@ -382,7 +397,7 @@ describe("anchor-solhedge-devnet", () => {
                 makerQuoteAssetAccount: token.getAssociatedTokenAddressSync(vaultFactory.account.quoteAsset, putMaker2Keypair.publicKey, false),
               }).signers([putMaker2Keypair]).rpc()
               console.log(`Transaction for ${putMaker2Keypair.publicKey} entering vault ${vault.publicKey} is`, tx3)
-              let maker2InfoForVault = await getUserMakerInfoForVault(program, vault.publicKey, putMaker2Keypair.publicKey)
+              let maker2InfoForVault = await getUserMakerInfoForPutVault(program, vault.publicKey, putMaker2Keypair.publicKey)
               const quoteAssetQty = maker2InfoForVault[0].account.quoteAssetQty.toNumber()
               assert.isTrue(quoteAssetQty > 0)
         
@@ -393,7 +408,7 @@ describe("anchor-solhedge-devnet", () => {
     });
 
     xit(`Now put maker ${putMaker2Keypair.publicKey} will play with adjusting his position on vaults`, async () => {
-      const vaultFactories = await getAllMaybeNotMaturedFactories(program)
+      const vaultFactories = await getAllMaybeNotMaturedPutFactories(program)
       console.log(`${putMaker2Keypair.publicKey} will look at ${vaultFactories.length} maybe not matured factories: `)
       for (let vaultFactory of vaultFactories) { 
         const maturity = vaultFactory.account.maturity.toNumber()
@@ -407,7 +422,7 @@ describe("anchor-solhedge-devnet", () => {
           const vaults = await getVaultsForPutFactory(program, vaultFactory.publicKey)
 
           for (let vault of vaults) {
-            let maker2InfoForVault = await getUserMakerInfoForVault(program, vault.publicKey, putMaker2Keypair.publicKey)
+            let maker2InfoForVault = await getUserMakerInfoForPutVault(program, vault.publicKey, putMaker2Keypair.publicKey)
             if (maker2InfoForVault.length > 0) { // putmaker is in the vault
               const notSoldQty = maker2InfoForVault[0].account.quoteAssetQty.toNumber() - maker2InfoForVault[0].account.volumeSold.toNumber()
               const lotPrice = vaultFactory.account.strike.toNumber()*(10**vault.account.lotSize)
@@ -416,7 +431,7 @@ describe("anchor-solhedge-devnet", () => {
                   putOptionVaultAddress, 
                   vaultBaseAssetTreasury, 
                   vaultQuoteAssetTreasury
-                } = await getVaultDerivedPdaAddresses(program, vaultFactory.publicKey, vaultFactory.account.baseAsset, vaultFactory.account.quoteAsset, vault.account.ord)
+                } = await getPutOptionVaultDerivedPdaAddresses(program, vaultFactory.publicKey, vaultFactory.account.baseAsset, vaultFactory.account.quoteAsset, vault.account.ord)
     
                 const newQtyLots = maker2InfoForVault[0].account.volumeSold.toNumber()/lotPrice
                 let tx4 = await program.methods.makerAdjustPositionPutOptionVault(new anchor.BN(newQtyLots), new anchor.BN(0)).accounts({        
@@ -429,7 +444,7 @@ describe("anchor-solhedge-devnet", () => {
                   quoteAssetMint: vaultFactory.account.quoteAsset,
                   makerQuoteAssetAccount: token.getAssociatedTokenAddressSync(vaultFactory.account.quoteAsset, putMaker2Keypair.publicKey, false)
                 }).signers([putMaker2Keypair]).rpc()
-                maker2InfoForVault = await getUserMakerInfoForVault(program, vault.publicKey, putMaker2Keypair.publicKey)
+                maker2InfoForVault = await getUserMakerInfoForPutVault(program, vault.publicKey, putMaker2Keypair.publicKey)
                 assert.equal(maker2InfoForVault[0].account.quoteAssetQty.toNumber(), newQtyLots*lotPrice)
           
               }
@@ -443,7 +458,7 @@ describe("anchor-solhedge-devnet", () => {
 
     xit("A PutTaker will now try to find vaults where he can enter", async () => {
       const slippageTolerance = 0.05      
-      const vaultFactories = await getAllMaybeNotMaturedFactories(program)
+      const vaultFactories = await getAllMaybeNotMaturedPutFactories(program)
       console.log(`PutTaker ${putTakerKeypair.publicKey} will look at ${vaultFactories.length} maybe not matured factories: `)
       for (let vaultFactory of vaultFactories) { 
         const maturity = vaultFactory.account.maturity.toNumber()
@@ -458,12 +473,12 @@ describe("anchor-solhedge-devnet", () => {
 
           for (let vault of vaults) {
             if (!vault.account.isTakersFull) {
-              const myTakerInfo = await getUserTakerInfoForVault(program, vault.publicKey, putTakerKeypair.publicKey)
+              const myTakerInfo = await getUserTakerInfoForPutVault(program, vault.publicKey, putTakerKeypair.publicKey)
               if (myTakerInfo.length > 0) {
                 continue
               }
               console.log(`PutTaker ${putTakerKeypair.publicKey} is not in vault ${vault.publicKey} will try to enter`)
-              const ticketAddress = await getUserTicketAccountAddressForVaultFactory(program, vault.account.factoryVault, putTakerKeypair.publicKey)
+              const ticketAddress = await getUserTicketAccountAddressForPutVaultFactory(program, vault.account.factoryVault, putTakerKeypair.publicKey)
               const oracleAddress = getOraclePubKey()
               console.log("Put taker before paying oracle SOL balance is", await anchor.getProvider().connection.getBalance(putTakerKeypair.publicKey)/ anchor.web3.LAMPORTS_PER_SOL)
               console.log("Oracle SOL balance is", await anchor.getProvider().connection.getBalance(oracleAddress)/ anchor.web3.LAMPORTS_PER_SOL)
@@ -484,7 +499,7 @@ describe("anchor-solhedge-devnet", () => {
               console.log("Put taker after oracle using ticket SOL balance is", await anchor.getProvider().connection.getBalance(putTakerKeypair.publicKey)/ anchor.web3.LAMPORTS_PER_SOL)        
               let updatedVaultFactory = await program.account.putOptionVaultFactoryInfo.fetch(vault.account.factoryVault)
               console.log("Updated put option fair price is", updatedVaultFactory.lastFairPrice.toNumber())
-              const sellers = await getSellersInVault(program, vault.publicKey, updatedVaultFactory.lastFairPrice.toNumber(), slippageTolerance)
+              const sellers = await getPutSellersInVault(program, vault.publicKey, updatedVaultFactory.lastFairPrice.toNumber(), slippageTolerance)
 
               const vaultPendingSell = vault.account.makersTotalPendingSell.toNumber()
               console.log('Total quote asset volume pending sell ', vaultPendingSell)
@@ -507,7 +522,7 @@ describe("anchor-solhedge-devnet", () => {
               const lotsQuoteAssetCanBuy = balanceQuoteAsset/lotPremium
               const lotsToBuy = Math.min(maxLotsToBuy, lotsQuoteAssetCanBuy)
               console.log(`Puttaker ${putTakerKeypair.publicKey} will try to buy ${lotsToBuy} lots`)
-              const remainingAccounts = await getSellersAsRemainingAccounts(lotsToBuy, program, sellers)
+              const remainingAccounts = await getPutSellersAsRemainingAccounts(lotsToBuy, program, sellers)
               const protocolFeesUSDCATA = await createTokenAccount(anchor.getProvider().connection, devnetPayerKeypair, snakeDollarMintAddr, protocolFeesAddr)
               const myMaxPrice = Math.floor(updatedVaultFactory.lastFairPrice.toNumber()*1.05)
               
@@ -537,7 +552,7 @@ describe("anchor-solhedge-devnet", () => {
     });
 
     it(`Now PutMaker ${putMaker1Keypair.publicKey} will ask oracle to settle price on matured vaults he is in`, async () => {
-      const makerInfosAllVaults = await getUserMakerInfoAllVaults(program, putMaker1Keypair.publicKey)
+      const makerInfosAllVaults = await getUserMakerInfoAllPutVaults(program, putMaker1Keypair.publicKey)
       let currEpoch = Math.floor(Date.now()/1000)
 
       for (const makerInfo of makerInfosAllVaults) {
@@ -546,10 +561,16 @@ describe("anchor-solhedge-devnet", () => {
         const vaultFactoryInfo = await program.account.putOptionVaultFactoryInfo.fetch(vaultInfo.factoryVault)
         if (!vaultFactoryInfo.matured && vaultFactoryInfo.maturity.toNumber() < currEpoch) {
           console.log(`Vault factory ${vaultInfo.factoryVault} has matured, will now ask oracle to settle price`)
-          const ticketAddress = await getUserSettleTicketAccountAddressForVaultFactory(program, vaultInfo.factoryVault, putMaker1Keypair.publicKey)
-          const ticketAccount = await program.account.putOptionSettlePriceTicketInfo.fetch(ticketAddress)
-          console.log('TICKET ACCOUNT IS')
-          console.log(ticketAccount)
+          const ticketAddress = await getUserSettleTicketAccountAddressForPutVaultFactory(program, vaultInfo.factoryVault, putMaker1Keypair.publicKey)
+          let ticketAccount = undefined
+          try {
+            ticketAccount = await program.account.putOptionSettlePriceTicketInfo.fetch(ticketAddress)
+            console.log('TICKET ACCOUNT IS')
+            console.log(ticketAccount)  
+          } catch(e) {
+            console.log('No previous ticket for settling this vault factory found for this user')
+          }
+          
           if (ticketAccount?.isUsed == undefined) {
             const oracleAddress = getOraclePubKey()
             let tx6 = await program.methods.genSettlePutOptionPriceTicket().accounts({
@@ -569,7 +590,7 @@ describe("anchor-solhedge-devnet", () => {
     it("Now put makers will get out of the settled options they are in", async () => {
       const putMakers = [putMaker1Keypair, putMaker2Keypair]
       for (const putMaker of putMakers) {
-        const makerInfosAllVaults = await getUserMakerInfoAllVaults(program, putMaker.publicKey)
+        const makerInfosAllVaults = await getUserMakerInfoAllPutVaults(program, putMaker.publicKey)
         for (const makerInfo of makerInfosAllVaults) { 
           const vaultAddr = makerInfo.account.putOptionVault
           const vaultInfo = await program.account.putOptionVaultInfo.fetch(vaultAddr)
@@ -599,7 +620,7 @@ describe("anchor-solhedge-devnet", () => {
     it("Now put takers will get out of the settled options they are in", async () => {
       const putTakers = [putTakerKeypair]
       for (const putTaker of putTakers) {
-        const takerInfoAllVaults = await getUserTakerInfoAllVaults(program, putTaker.publicKey)
+        const takerInfoAllVaults = await getUserTakerInfoAllPutVaults(program, putTaker.publicKey)
         for (const takerInfo of takerInfoAllVaults) {
           const vaultAddr = takerInfo.account.putOptionVault
           const vaultInfo = await program.account.putOptionVaultInfo.fetch(vaultAddr)
@@ -628,6 +649,16 @@ describe("anchor-solhedge-devnet", () => {
   }
 })
 
+async function confirm(tx: string, connection: anchor.web3.Connection) {
+  const { blockhash, lastValidBlockHeight } = await connection.getLatestBlockhash();
+  await connection.confirmTransaction({
+    blockhash,
+    lastValidBlockHeight,
+    signature: tx
+  }, 'singleGossip');
+}
+
+
 describe("anchor-solhedge-localnet", () => {
   //console.log(anchor.AnchorProvider.env())
   
@@ -641,8 +672,12 @@ describe("anchor-solhedge-localnet", () => {
     const minterKeypair = keyPairFromSecret(TEST_MOCK_MINTER_KEY)
     const putMakerKeypair = keyPairFromSecret(TEST_PUT_MAKER_KEY)
     const putMaker2Keypair = keyPairFromSecret(TEST_PUT_MAKER2_KEY)
+    const callMakerKeypair = keyPairFromSecret(TEST_CALL_MAKER_KEY)
+    const callMaker2Keypair = keyPairFromSecret(TEST_CALL_MAKER2_KEY)
+
   
     const putTakerKeypair = keyPairFromSecret(TEST_PUT_TAKER_KEY)
+    const callTakerKeypair = keyPairFromSecret(TEST_CALL_TAKER_KEY)
     const protocolFeesKeypair = keyPairFromSecret(TEST_PROTOCOL_FEES_KEY)
   
     const usdcToken = new anchor.web3.PublicKey("EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v")
@@ -684,6 +719,18 @@ describe("anchor-solhedge-localnet", () => {
           airdropSolIfNeeded(
             protocolFeesKeypair,
             anchor.getProvider().connection
+          ),
+          airdropSolIfNeeded(
+            callMakerKeypair,
+            anchor.getProvider().connection
+          ),
+          airdropSolIfNeeded(
+            callMaker2Keypair,
+            anchor.getProvider().connection
+          ),
+          airdropSolIfNeeded(
+            callTakerKeypair,
+            anchor.getProvider().connection
           )
         ]
         await Promise.all(airdrops)
@@ -698,6 +745,276 @@ describe("anchor-solhedge-localnet", () => {
       const tx = await program.methods.initialize().rpc();
       console.log("Your transaction signature", tx);
     });
+    it("Creating a call option maker vault", async () => {
+      const conn = anchor.getProvider().connection
+      const wBTCMintAmountTaker = 0.02
+      const callMakerwBTCATA = await createTokenAccount(conn, minterKeypair, wormholeBTCToken, callMakerKeypair.publicKey)
+      await createTokenAccount(conn, minterKeypair, usdcToken, callMakerKeypair.publicKey) // creating USDC ATA to receive premium
+      await mintTokens(conn, minterKeypair, wormholeBTCToken, callMakerwBTCATA.address, minterKeypair, wBTCMintAmountTaker)
+      console.log(`Minted ${wBTCMintAmountTaker} wBTC to test call maker, he will create a call option from here`)
+      let currEpoch = Math.floor(Date.now()/1000)
+      let oneWeek = currEpoch + (7*24*60*60)
+  
+      let strikeInDollars = 29000
+      const mintInfoUSDC = await token.getMint(conn, usdcToken)
+      const mintInfoWBTC = await token.getMint(conn, wormholeBTCToken)
+      let lamportPrice = strikeInDollars * (10 ** mintInfoUSDC.decimals)
+      console.log(`Lamport price for ${strikeInDollars} is ${lamportPrice}`)
+      const vaultParams = new MakerCreateCallOptionParams(
+        {
+          maturity: new anchor.BN(oneWeek+300),
+          strike: new anchor.BN(lamportPrice),
+          //lotSize is in 10^lot_size
+          lotSize: -3,
+          maxMakers: 100,
+          maxTakers: 100,
+          numLotsToSell: new anchor.BN(10),
+          premiumLimit: new anchor.BN(0)  
+        })
+        const callOptionVaultFactoryAddress = await getCallOptionVaultFactoryPdaAddress(program, wormholeBTCToken, usdcToken, vaultParams.maturity, vaultParams.strike)
+
+        console.log('Derived address for CALL vault factory is: ' + callOptionVaultFactoryAddress.toString())
+        const beforeBalance = await conn.getBalance(callMakerKeypair.publicKey)
+        console.log("Initial callmaker SOL balance is", beforeBalance / anchor.web3.LAMPORTS_PER_SOL)    
+        let tx = await program.methods.makerNextCallOptionVaultId(vaultParams).accounts({
+          initializer: callMakerKeypair.publicKey,
+          vaultFactoryInfo: callOptionVaultFactoryAddress,
+          baseAssetMint: wormholeBTCToken,
+          quoteAssetMint: mintInfoUSDC.address
+        }).signers([callMakerKeypair]).rpc(confirmOptions)
+    
+        //inspired by example in https://github.com/coral-xyz/anchor/blob/master/tests/cpi-returns/tests/cpi-return.ts
+        console.log("Transaction Signature -> ", tx)
+        let t = await conn.getTransaction(tx, {
+          maxSupportedTransactionVersion: 0,
+          commitment: "confirmed",
+        });
+        const [key, , buffer] = getReturnLog(t)
+        assert.equal(key, program.programId)
+        const reader = new borsh.BinaryReader(buffer)
+        const vaultNumber = reader.readU64()
+        assert.equal(vaultNumber.toNumber(), 1)
+    
+        const {
+          callOptionVaultAddress, 
+          vaultBaseAssetTreasury, 
+          vaultQuoteAssetTreasury
+        } = await getCallOptionVaultDerivedPdaAddresses(program, callOptionVaultFactoryAddress, wormholeBTCToken, usdcToken, vaultNumber)
+    
+        var tx2 = await program.methods.makerCreateCallOptionVault(vaultParams, vaultNumber).accounts({
+          initializer: callMakerKeypair.publicKey,
+          vaultFactoryInfo: callOptionVaultFactoryAddress,
+          vaultInfo: callOptionVaultAddress,
+          vaultBaseAssetTreasury: vaultBaseAssetTreasury,
+          vaultQuoteAssetTreasury: vaultQuoteAssetTreasury,
+          baseAssetMint: wormholeBTCToken,
+          quoteAssetMint: usdcToken,
+          makerBaseAssetAccount: callMakerwBTCATA.address,
+        }).signers([callMakerKeypair]).rpc()
+    
+        console.log("Transaction Signature -> ", tx2)
+        const afterBalance = await anchor.getProvider().connection.getBalance(callMakerKeypair.publicKey)
+        console.log("Final callmaker SOL balance is", afterBalance / anchor.web3.LAMPORTS_PER_SOL)
+        const updatedATA = await token.getAccount(anchor.getProvider().connection, callMakerwBTCATA.address)
+        const initialLamports = wBTCMintAmountTaker * (10**mintInfoWBTC.decimals)
+        const transferLamports = (10**vaultParams.lotSize)*vaultParams.numLotsToSell.toNumber()*(10**mintInfoWBTC.decimals)
+        assert.equal(initialLamports, transferLamports+Number(updatedATA.amount))
+    
+        const vaultFactories = await getAllMaybeNotMaturedCallFactories(program)
+        assert.equal(vaultFactories[0].account.isInitialized, true)
+        assert.equal(vaultFactories[0].account.matured, false)
+        assert.equal(vaultFactories[0].account.maturity.toNumber(), vaultParams.maturity.toNumber())
+        assert.equal(vaultFactories[0].account.baseAsset.toString(), wormholeBTCToken.toString())
+        assert.equal(vaultFactories[0].account.quoteAsset.toString(), usdcToken.toString())
+        assert.equal(vaultFactories[0].account.strike.toNumber(), vaultParams.strike.toNumber())
+        const factoryKey = vaultFactories[0].publicKey
+    
+        const vaultsForFactory = await getVaultsForCallFactory(program, factoryKey)
+        assert.equal(vaultsForFactory[0].account.maxMakers, vaultParams.maxMakers)
+        assert.equal(vaultsForFactory[0].account.maxTakers, vaultParams.maxTakers)
+    
+        const userInfoInVault = await getUserMakerInfoAllCallVaults(program, callMakerKeypair.publicKey)
+        assert.equal(userInfoInVault[0].account.premiumLimit.toNumber(), vaultParams.premiumLimit.toNumber())
+    
+        const makerInfos = await getAllCallMakerInfosForVault(program, vaultsForFactory[0].publicKey)
+        assert.equal(makerInfos[0].account.premiumLimit.toNumber(), vaultParams.premiumLimit.toNumber())
+    
+        const makerInfoForVault = await getUserMakerInfoForCallVault(program, vaultsForFactory[0].publicKey, callMakerKeypair.publicKey)
+        assert.equal(makerInfoForVault[0].account.premiumLimit.toNumber(), vaultParams.premiumLimit.toNumber())        
+
+        console.log('Now a second call maker will enter the same vault')
+        const callMaker2wBTCCATA = await createTokenAccount(conn, minterKeypair, wormholeBTCToken, callMaker2Keypair.publicKey)
+        const wbtcMint2Amount = 0.08
+        await mintTokens(conn, minterKeypair, wormholeBTCToken, callMaker2wBTCCATA.address, minterKeypair, wbtcMint2Amount)
+        console.log('Minted 0.08 wBTC to test call maker 2')
+        const callMaker2ATA = await token.getOrCreateAssociatedTokenAccount(conn, minterKeypair, wormholeBTCToken, callMaker2Keypair.publicKey)
+        await createTokenAccount(conn, minterKeypair, usdcToken, callMaker2Keypair.publicKey) // creating USDC ATA to receive premium
+        const callOptionVaultFactoryAddress2 = await getCallOptionVaultFactoryPdaAddress(program, wormholeBTCToken, usdcToken, vaultParams.maturity, vaultParams.strike)
+        const vaultInfo = (await getVaultsForCallFactory(program, callOptionVaultFactoryAddress2))[0]
+        const vaultBaseAssetTreasury2 = await token.getAssociatedTokenAddress(wormholeBTCToken, vaultInfo.publicKey, true)
+        const vaultQuoteAssetTreasury2 = await token.getAssociatedTokenAddress(usdcToken, vaultInfo.publicKey, true)
+
+        try {
+          let tx3 = await program.methods.makerEnterCallOptionVault(new anchor.BN(40), new anchor.BN(0)).accounts({
+            initializer: callMaker2Keypair.publicKey,
+            vaultFactoryInfo: callOptionVaultFactoryAddress2,
+            vaultInfo: vaultInfo.publicKey,
+            vaultBaseAssetTreasury: vaultBaseAssetTreasury2,
+            baseAssetMint: wormholeBTCToken,
+            quoteAssetMint: usdcToken,
+            makerBaseAssetAccount: callMaker2ATA.address,
+          }).signers([callMaker2Keypair]).rpc()
+        } catch (e) {
+          console.log(e)
+          throw e
+        }
+        const makerInfos2 = await getAllCallMakerInfosForVault(program, vaultInfo.publicKey)
+        // console.log(makerInfos2)
+        assert.equal(makerInfos2.length, 2)
+    
+        let maker2InfoForVault = await getUserMakerInfoForCallVault(program, vaultInfo.publicKey, callMaker2Keypair.publicKey)
+        const qty40Lots = maker2InfoForVault[0].account.baseAssetQty.toNumber()
+        assert.isTrue(qty40Lots > 0)
+
+        // testing maker adjust position
+        let tx4 = await program.methods.makerAdjustPositionCallOptionVault(new anchor.BN(0), new anchor.BN(0)).accounts({        
+          initializer: callMaker2Keypair.publicKey,
+          vaultFactoryInfo: callOptionVaultFactoryAddress2,
+          vaultInfo: vaultInfo.publicKey,
+          vaultBaseAssetTreasury: vaultBaseAssetTreasury2,
+          callOptionMakerInfo: maker2InfoForVault[0].publicKey,
+          baseAssetMint: wormholeBTCToken,
+          quoteAssetMint: usdcToken,
+          makerBaseAssetAccount: callMaker2ATA.address,
+        }).signers([callMaker2Keypair]).rpc()
+        maker2InfoForVault = await getUserMakerInfoForCallVault(program, vaultInfo.publicKey, callMaker2Keypair.publicKey)
+        assert.equal(maker2InfoForVault[0].account.baseAssetQty.toNumber(), 0)
+    
+        let tx5 = await program.methods.makerAdjustPositionCallOptionVault(new anchor.BN(40), new anchor.BN(0)).accounts({
+          
+          initializer: callMaker2Keypair.publicKey,
+          vaultFactoryInfo: callOptionVaultFactoryAddress2,
+          vaultInfo: vaultInfo.publicKey,
+          vaultBaseAssetTreasury: vaultBaseAssetTreasury2,
+          callOptionMakerInfo: maker2InfoForVault[0].publicKey,
+          baseAssetMint: wormholeBTCToken,
+          quoteAssetMint: usdcToken,
+          makerBaseAssetAccount: callMaker2ATA.address,
+        }).signers([callMaker2Keypair]).rpc()
+        maker2InfoForVault = await getUserMakerInfoForCallVault(program, vaultInfo.publicKey, callMaker2Keypair.publicKey)
+        assert.equal(maker2InfoForVault[0].account.baseAssetQty.toNumber(), qty40Lots)
+  
+        //Starting call taker simulation
+        const oracleAddress = getOraclePubKey()
+
+        const ticketAddress = await getUserTicketAccountAddressForCallVaultFactory(program, callOptionVaultFactoryAddress2, callTakerKeypair.publicKey)
+    
+        console.log("Call taker before paying oracle SOL balance is", await anchor.getProvider().connection.getBalance(callTakerKeypair.publicKey)/ anchor.web3.LAMPORTS_PER_SOL)
+        console.log("Oracle SOL balance is", await anchor.getProvider().connection.getBalance(oracleAddress)/ anchor.web3.LAMPORTS_PER_SOL)
+    
+    
+        let tx6 = await program.methods.genUpdateCallOptionFairPriceTicket().accounts({
+          vaultFactoryInfo: callOptionVaultFactoryAddress2,
+          initializer: callTakerKeypair.publicKey,
+          oracleWallet: oracleAddress,
+          callOptionFairPriceTicket: ticketAddress
+        }).signers([callTakerKeypair]).rpc()
+    
+        console.log("Call taker after paying oracle SOL balance is", await anchor.getProvider().connection.getBalance(callTakerKeypair.publicKey)/ anchor.web3.LAMPORTS_PER_SOL)    
+        console.log("Oracle SOL balance is", await anchor.getProvider().connection.getBalance(oracleAddress)/ anchor.web3.LAMPORTS_PER_SOL)
+    
+        let tx7 = await updateCallOptionFairPrice(program, callOptionVaultFactoryAddress2, callTakerKeypair.publicKey)
+        console.log("Oracle SOL balance after updating fair price is", await anchor.getProvider().connection.getBalance(oracleAddress)/ anchor.web3.LAMPORTS_PER_SOL)
+        console.log("Call taker after oracle using ticket SOL balance is", await anchor.getProvider().connection.getBalance(callTakerKeypair.publicKey)/ anchor.web3.LAMPORTS_PER_SOL)        
+        let updatedVaultFactory = await program.account.callOptionVaultFactoryInfo.fetch(callOptionVaultFactoryAddress2)
+        const fairPrice = updatedVaultFactory.lastFairPrice.toNumber()
+        console.log('Updated call price is ', fairPrice)
+
+        const slippageTolerance = 0.05      
+        let sellers = await getCallSellersInVault(program, vaultInfo.publicKey, fairPrice, slippageTolerance)
+        assert.equal(sellers.length, 2)
+
+
+        const callTakerUSDCATA = await createTokenAccount(conn, minterKeypair, usdcToken, callTakerKeypair.publicKey)
+      
+        const usdcMintAmountTaker = 10000
+        await mintTokens(conn, minterKeypair, usdcToken, callTakerUSDCATA.address, minterKeypair, usdcMintAmountTaker)
+        console.log('Minted 10k usdc to test call taker, in order to pay call option premium and fund her option')
+  
+        //Lets suppose put taker slippage tolerance is 5%
+        const myMaxPrice = Math.floor(updatedVaultFactory.lastFairPrice.toNumber()*1.05)
+        const protocolFeesUSDCATA = await createTokenAccount(conn, minterKeypair, usdcToken, protocolFeesKeypair.publicKey)
+        const lotPrice = (updatedVaultFactory.strike.toNumber() + updatedVaultFactory.lastFairPrice.toNumber()*1.05)*(10**vaultInfo.account.lotSize)
+        const takerLots = Math.floor(usdcMintAmountTaker*(10**mintInfoUSDC.decimals)/lotPrice)
+        
+        const remainingAccounts = await getCallSellersAsRemainingAccounts(takerLots, program, sellers)
+        const quoteAssetInitialFund = 0
+        
+        console.log(`Call taker will try to buy ${takerLots} lots`)
+        let tx8 = await program.methods.takerBuyLotsCallOptionVault(
+          new anchor.BN(myMaxPrice), 
+          new anchor.BN(takerLots), 
+          new anchor.BN(quoteAssetInitialFund)).accounts({
+            baseAssetMint: wormholeBTCToken,
+            quoteAssetMint: usdcToken,
+            initializer: callTakerKeypair.publicKey,
+            protocolQuoteAssetTreasury: protocolFeesUSDCATA.address,
+            frontendQuoteAssetTreasury: protocolFeesUSDCATA.address, //also sending frontend share to protocol in this test
+            takerQuoteAssetAccount: callTakerUSDCATA.address,
+            vaultFactoryInfo: callOptionVaultFactoryAddress2,
+            vaultInfo: vaultInfo.publicKey,
+            vaultQuoteAssetTreasury: vaultQuoteAssetTreasury2,
+          }).remainingAccounts(
+            remainingAccounts
+          ).signers([callTakerKeypair]).rpc()
+          await confirm(tx8, conn);
+          const tr = await conn.getTransaction(tx8, {
+            maxSupportedTransactionVersion: 0,
+            commitment: "confirmed",
+          });
+
+          // console.log('>>>>> tr IS')
+          // console.log(tr)
+          const [tx8Key, tx8Data, tx8Buffer] = getReturnLog(tr);
+          // console.log('>>>> tx8Key is')
+          // console.log(tx8Key)
+          // console.log('>>>> programId is')
+          // console.log(program.programId)
+          // console.log('>>>tx8Data is')
+          // console.log(tx8Data)
+
+          assert.equal(tx8Key, program.programId.toBase58());
+      
+          // Check for matching log on receive side
+          let receiveLog = tr.meta.logMessages.find(
+            (log) => log.includes(tx8Data, log.indexOf('Program return: '))
+          );
+          assert(receiveLog !== undefined);
+          // Deserialize the struct and validate
+          class Assignable {
+            constructor(properties) {
+              Object.keys(properties).map((key) => {
+                this[key] = properties[key];
+              });
+            }
+          }
+          class Data extends Assignable {}
+          const schema = new Map([
+            [Data, { kind: "struct", fields: [["numLotsBought", "u64"], ["price", "u64"], ["fundingAdded", "u64"]] }],
+          ]);
+          const deserialized = borsh.deserialize(schema, Data, tx8Buffer);
+          // @ts-ignore
+          assert.equal(updatedVaultFactory.lastFairPrice.toNumber(), deserialized.price)
+          // @ts-ignore
+          assert.equal(deserialized.fundingAdded, quoteAssetInitialFund)
+          // @ts-ignore
+          console.log(`Call taker bought ${deserialized.numLotsBought} lots with premium at ${deserialized.price} and added ${deserialized.fundingAdded} as funding`)
+    
+          console.log("ALL DONE")
+  
+        
+    });
+
     it("Creating a put option maker vault", async () => {
   
       const conn = anchor.getProvider().connection
@@ -734,7 +1051,7 @@ describe("anchor-solhedge-localnet", () => {
           premiumLimit: new anchor.BN(Math.floor(lamportPrice/100))  
         })
   
-      const putOptionVaultFactoryAddress = await getVaultFactoryPdaAddress(program, wormholeBTCToken, usdcToken, vaultParams.maturity, vaultParams.strike)
+      const putOptionVaultFactoryAddress = await getPutOptionVaultFactoryPdaAddress(program, wormholeBTCToken, usdcToken, vaultParams.maturity, vaultParams.strike)
       
       console.log('Derived address for vault factory is: ' + putOptionVaultFactoryAddress.toString())
       const beforeBalance = await anchor.getProvider().connection.getBalance(putMakerKeypair.publicKey)
@@ -762,7 +1079,7 @@ describe("anchor-solhedge-localnet", () => {
         putOptionVaultAddress, 
         vaultBaseAssetTreasury, 
         vaultQuoteAssetTreasury
-      } = await getVaultDerivedPdaAddresses(program, putOptionVaultFactoryAddress, wormholeBTCToken, usdcToken, vaultNumber)
+      } = await getPutOptionVaultDerivedPdaAddresses(program, putOptionVaultFactoryAddress, wormholeBTCToken, usdcToken, vaultNumber)
   
       //const userAVA = getMakerVaultAssociatedAccountAddress(program, putOptionVaultFactoryAddress, vaultNumber, putMakerKeypair.publicKey)
   
@@ -781,7 +1098,7 @@ describe("anchor-solhedge-localnet", () => {
       const afterBalance = await anchor.getProvider().connection.getBalance(putMakerKeypair.publicKey)
       console.log("Final putmaker SOL balance is", afterBalance / anchor.web3.LAMPORTS_PER_SOL)
   
-      const vaultFactories = await getAllMaybeNotMaturedFactories(program)
+      const vaultFactories = await getAllMaybeNotMaturedPutFactories(program)
       assert.equal(vaultFactories[0].account.isInitialized, true)
       assert.equal(vaultFactories[0].account.matured, false)
       assert.equal(vaultFactories[0].account.maturity.toNumber(), vaultParams.maturity.toNumber())
@@ -794,13 +1111,13 @@ describe("anchor-solhedge-localnet", () => {
       assert.equal(vaultsForFactory[0].account.maxMakers, vaultParams.maxMakers)
       assert.equal(vaultsForFactory[0].account.maxTakers, vaultParams.maxTakers)
   
-      const userInfoInVault = await getUserMakerInfoAllVaults(program, putMakerKeypair.publicKey)
+      const userInfoInVault = await getUserMakerInfoAllPutVaults(program, putMakerKeypair.publicKey)
       assert.equal(userInfoInVault[0].account.premiumLimit.toNumber(), vaultParams.premiumLimit.toNumber())
   
-      const makerInfos = await getAllMakerInfosForVault(program, vaultsForFactory[0].publicKey)
+      const makerInfos = await getAllPutMakerInfosForVault(program, vaultsForFactory[0].publicKey)
       assert.equal(makerInfos[0].account.premiumLimit.toNumber(), vaultParams.premiumLimit.toNumber())
   
-      const makerInfoForVault = await getUserMakerInfoForVault(program, vaultsForFactory[0].publicKey, putMakerKeypair.publicKey)
+      const makerInfoForVault = await getUserMakerInfoForPutVault(program, vaultsForFactory[0].publicKey, putMakerKeypair.publicKey)
       assert.equal(makerInfoForVault[0].account.premiumLimit.toNumber(), vaultParams.premiumLimit.toNumber())
   
       console.log("Second maker entering the same put option vault")
@@ -811,7 +1128,7 @@ describe("anchor-solhedge-localnet", () => {
       const updatedATA2 = await token.getOrCreateAssociatedTokenAccount(conn, minterKeypair, usdcToken, putMaker2Keypair.publicKey)
       const balance2 = updatedATA2.amount / BigInt(10.0 ** mintInfoUSDC.decimals)
       expect(balance2).eq(BigInt(usdcMint2Amount))
-      const putOptionVaultFactoryAddress2 = await getVaultFactoryPdaAddress(program, wormholeBTCToken, usdcToken, vaultParams.maturity, vaultParams.strike)
+      const putOptionVaultFactoryAddress2 = await getPutOptionVaultFactoryPdaAddress(program, wormholeBTCToken, usdcToken, vaultParams.maturity, vaultParams.strike)
       const vaultInfo = (await getVaultsForPutFactory(program, putOptionVaultFactoryAddress2))[0]
       const vaultBaseAssetTreasury2 = await token.getAssociatedTokenAddress(wormholeBTCToken, vaultInfo.publicKey, true)
       const vaultQuoteAssetTreasury2 = await token.getAssociatedTokenAddress(usdcToken, vaultInfo.publicKey, true)
@@ -825,11 +1142,11 @@ describe("anchor-solhedge-localnet", () => {
         quoteAssetMint: usdcToken,
         makerQuoteAssetAccount: updatedATA2.address,
       }).signers([putMaker2Keypair]).rpc()
-      const makerInfos2 = await getAllMakerInfosForVault(program, vaultInfo.publicKey)
+      const makerInfos2 = await getAllPutMakerInfosForVault(program, vaultInfo.publicKey)
       // console.log(makerInfos2)
       assert.equal(makerInfos2.length, 2)
   
-      let maker2InfoForVault = await getUserMakerInfoForVault(program, vaultInfo.publicKey, putMaker2Keypair.publicKey)
+      let maker2InfoForVault = await getUserMakerInfoForPutVault(program, vaultInfo.publicKey, putMaker2Keypair.publicKey)
       const qty500Lots = maker2InfoForVault[0].account.quoteAssetQty.toNumber()
       assert.isTrue(qty500Lots > 0)
   
@@ -844,7 +1161,7 @@ describe("anchor-solhedge-localnet", () => {
         quoteAssetMint: usdcToken,
         makerQuoteAssetAccount: updatedATA2.address,
       }).signers([putMaker2Keypair]).rpc()
-      maker2InfoForVault = await getUserMakerInfoForVault(program, vaultInfo.publicKey, putMaker2Keypair.publicKey)
+      maker2InfoForVault = await getUserMakerInfoForPutVault(program, vaultInfo.publicKey, putMaker2Keypair.publicKey)
       assert.equal(maker2InfoForVault[0].account.quoteAssetQty.toNumber(), 0)
   
       let tx5 = await program.methods.makerAdjustPositionPutOptionVault(new anchor.BN(500), new anchor.BN(0)).accounts({
@@ -858,19 +1175,19 @@ describe("anchor-solhedge-localnet", () => {
         quoteAssetMint: usdcToken,
         makerQuoteAssetAccount: updatedATA2.address,
       }).signers([putMaker2Keypair]).rpc()
-      maker2InfoForVault = await getUserMakerInfoForVault(program, vaultInfo.publicKey, putMaker2Keypair.publicKey)
+      maker2InfoForVault = await getUserMakerInfoForPutVault(program, vaultInfo.publicKey, putMaker2Keypair.publicKey)
       assert.equal(maker2InfoForVault[0].account.quoteAssetQty.toNumber(), qty500Lots)
   
       let fairPrice = Math.floor(lamportPrice/100)
       const slippageTolerance = 0.05
   
       fairPrice -= 100000000
-      let sellers = await getSellersInVault(program, vaultInfo.publicKey, fairPrice, slippageTolerance)
+      let sellers = await getPutSellersInVault(program, vaultInfo.publicKey, fairPrice, slippageTolerance)
       // fairPrice below premium limit of 1st maker
       assert.equal(sellers.length, 1)
   
       fairPrice += 100000000
-      sellers = await getSellersInVault(program, vaultInfo.publicKey, fairPrice, slippageTolerance)
+      sellers = await getPutSellersInVault(program, vaultInfo.publicKey, fairPrice, slippageTolerance)
       // now fairPrice is in the range of both sellers
       assert.equal(sellers.length, 2)
   
@@ -882,7 +1199,7 @@ describe("anchor-solhedge-localnet", () => {
       const slots = await connection.getBlocks(Math.max(currentSlot - 200, 0));
       const oracleAddress = getOraclePubKey()
 
-      const ticketAddress = await getUserTicketAccountAddressForVaultFactory(program, putOptionVaultFactoryAddress2, putTakerKeypair.publicKey)
+      const ticketAddress = await getUserTicketAccountAddressForPutVaultFactory(program, putOptionVaultFactoryAddress2, putTakerKeypair.publicKey)
   
       console.log("Put taker before paying oracle SOL balance is", await anchor.getProvider().connection.getBalance(putTakerKeypair.publicKey)/ anchor.web3.LAMPORTS_PER_SOL)
       console.log("Oracle SOL balance is", await anchor.getProvider().connection.getBalance(oracleAddress)/ anchor.web3.LAMPORTS_PER_SOL)
@@ -903,7 +1220,7 @@ describe("anchor-solhedge-localnet", () => {
       console.log("Put taker after oracle using ticket SOL balance is", await anchor.getProvider().connection.getBalance(putTakerKeypair.publicKey)/ anchor.web3.LAMPORTS_PER_SOL)        
       let updatedVaultFactory = await program.account.putOptionVaultFactoryInfo.fetch(putOptionVaultFactoryAddress2)
       console.log(updatedVaultFactory.lastFairPrice.toNumber())
-      sellers = await getSellersInVault(program, vaultInfo.publicKey, updatedVaultFactory.lastFairPrice.toNumber(), slippageTolerance)
+      sellers = await getPutSellersInVault(program, vaultInfo.publicKey, updatedVaultFactory.lastFairPrice.toNumber(), slippageTolerance)
       //console.log('sellers in vault')
       //console.log(sellers)
   
@@ -933,106 +1250,38 @@ describe("anchor-solhedge-localnet", () => {
       const tokenAccountTestFetch = await token.getAccount(conn, protocolFeesUSDCATA.address)
       assert.equal(tokenAccountTestFetch.address, protocolFeesUSDCATA.address)
   
-      let sellersAndATAS = await getMakerATAs(program, sellers, usdcToken)
-      console.log("SELLERS AND ATAS")
-      console.log(sellersAndATAS)
+      let sellersAndATAS = await getPutMakerATAs(program, sellers, usdcToken)
+      // console.log("SELLERS AND ATAS")
+      // console.log(sellersAndATAS)
       const quoteAssetByLot = (10**vaultInfo.account.lotSize)*updatedVaultFactory.strike.toNumber()
       const lotsInQuoteAsset = takerLots*quoteAssetByLot
       console.log(`${takerLots} lots of ${10**vaultInfo.account.lotSize} at strike price ${updatedVaultFactory.strike.toNumber()} mean ${lotsInQuoteAsset} in USDC lamports`)
       
-      // will we get the first 4, and the 5st may be one later if the fourth does not complete
-      // enough demand
-      var i = 0
-      let remainingAccounts = []
-      for (const [putOptionMakerInfo, makerATA] of sellersAndATAS) {
-        let potentialLots = 0
-        if (i < 4) {
-          const remAccountInfo = {
-            pubkey: putOptionMakerInfo.publicKey,
-            isWritable: true,
-            isSigner: false
-          }
-          const remAccountATA = {
-            pubkey: makerATA.address,
-            isWritable: true,
-            isSigner: false
-          }
-          remainingAccounts.push(remAccountInfo);
-          remainingAccounts.push(remAccountATA);
-          const quoteAssetAvailable = putOptionMakerInfo.account.quoteAssetQty.toNumber() - putOptionMakerInfo.account.volumeSold.toNumber()
-          const userPotentialLots = Math.floor(quoteAssetAvailable/quoteAssetByLot)
-          potentialLots += userPotentialLots
-          console.log(`User ${i} has at most ${userPotentialLots} lots to sell`)
-        } else if (remainingAccounts.length >= 5) {
-          break;
-        } else if (i < sellersAndATAS.length-1){
-          const quoteAssetAvailable = putOptionMakerInfo.account.quoteAssetQty.toNumber() - putOptionMakerInfo.account.volumeSold.toNumber()
-          const userPotentialLots = Math.floor(quoteAssetAvailable/quoteAssetByLot)
-          if (potentialLots + userPotentialLots >= takerLots) {
-            const remAccountInfo = {
-              pubkey: putOptionMakerInfo.publicKey,
-              isWritable: true,
-              isSigner: false
-            }
-            const remAccountATA = {
-              pubkey: makerATA.address,
-              isWritable: true,
-              isSigner: false
-            }
-            remainingAccounts.push(remAccountInfo);
-            remainingAccounts.push(remAccountATA);
-            potentialLots += userPotentialLots;
-            break; 
-          }
-        } else {
-          // last chance, this last one or the 5th
-          let quoteAssetAvailable = putOptionMakerInfo.account.quoteAssetQty.toNumber() - putOptionMakerInfo.account.volumeSold.toNumber()
-          let userPotentialLots = Math.floor(quoteAssetAvailable/quoteAssetByLot)
-          let makerPubkey = putOptionMakerInfo.publicKey
-          let ataPubkey = makerATA.address
-          if (potentialLots + userPotentialLots < takerLots) {
-            makerPubkey = sellersAndATAS[4][0].publicKey
-            ataPubkey = sellersAndATAS[4][1].address
-            quoteAssetAvailable = sellersAndATAS[4][0].account.quoteAssetQty.toNumber() - sellersAndATAS[4][0].account.volumeSold.toNumber()
-            userPotentialLots = Math.floor(quoteAssetAvailable/quoteAssetByLot)
-          }
-          const remAccountInfo = {
-            pubkey: makerPubkey,
-            isWritable: true,
-            isSigner: false
-          }
-          const remAccountATA = {
-            pubkey: ataPubkey,
-            isWritable: true,
-            isSigner: false
-          }
-          remainingAccounts.push(remAccountInfo);
-          remainingAccounts.push(remAccountATA);
-          potentialLots += userPotentialLots;
-          break;
-        }
-        i++;
+      const remainingAccounts = await getPutSellersAsRemainingAccounts(takerLots, program, sellers)
+      
+      try {
+        let tx8 = await program.methods.takerBuyLotsPutOptionVault(
+          new anchor.BN(myMaxPrice), 
+          new anchor.BN(takerLots), 
+          new anchor.BN(btcLamports)).accounts({
+            baseAssetMint: wormholeBTCToken,
+            quoteAssetMint: usdcToken,
+            initializer: putTakerKeypair.publicKey,
+            protocolQuoteAssetTreasury: protocolFeesUSDCATA.address,
+            frontendQuoteAssetTreasury: protocolFeesUSDCATA.address, //also sending frontend share to protocol in this test
+            takerBaseAssetAccount: putTakerwBTCATA.address,
+            takerQuoteAssetAccount: putTakerUSDCATA.address,
+            vaultFactoryInfo: putOptionVaultFactoryAddress2,
+            vaultInfo: vaultInfo.publicKey,
+            vaultBaseAssetTreasury: vaultBaseAssetTreasury2,
+          }).remainingAccounts(
+            remainingAccounts
+          ).signers([putTakerKeypair]).rpc()
+    
+          console.log("ALL DONE")
+      } catch(e) {
+        console.log(e)
       }
-  
-      let tx8 = await program.methods.takerBuyLotsPutOptionVault(
-        new anchor.BN(myMaxPrice), 
-        new anchor.BN(takerLots), 
-        new anchor.BN(btcLamports)).accounts({
-          baseAssetMint: wormholeBTCToken,
-          quoteAssetMint: usdcToken,
-          initializer: putTakerKeypair.publicKey,
-          protocolQuoteAssetTreasury: protocolFeesUSDCATA.address,
-          frontendQuoteAssetTreasury: protocolFeesUSDCATA.address, //also sending frontend share to protocol in this test
-          takerBaseAssetAccount: putTakerwBTCATA.address,
-          takerQuoteAssetAccount: putTakerUSDCATA.address,
-          vaultFactoryInfo: putOptionVaultFactoryAddress2,
-          vaultInfo: vaultInfo.publicKey,
-          vaultBaseAssetTreasury: vaultBaseAssetTreasury2,
-        }).remainingAccounts(
-          remainingAccounts
-        ).signers([putTakerKeypair]).rpc()
-  
-        console.log("ALL DONE")
   
     });  
 
