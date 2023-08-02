@@ -29,8 +29,8 @@ anchor_solhedge = "FoUvjSVZMDccmb2fCppM24N8yzVpPMKYn1h2CZDV7FFa"
 url = "https://api.apr.dev"
 
 [provider]
-#cluster = "devnet"
-cluster = "localnet"
+cluster = "devnet"
+#cluster = "localnet"
 wallet = "/home/srmq/.config/solana/id.json"
 
 [scripts]

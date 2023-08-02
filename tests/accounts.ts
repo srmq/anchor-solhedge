@@ -35,6 +35,16 @@ export const getMakerNextPutOptionVaultIdFromTx = async (
       const reader = new borsh.BinaryReader(buffer)
       const vaultNumber = reader.readU64()
       return vaultNumber
+        //XXX better check if txid is really from a next PUT option vault
+}
+
+export const getMakerNextCallOptionVaultIdFromTx = async (
+  program: anchor.Program<AnchorSolhedge>, 
+  connection: Connection, 
+  txid: string
+): Promise<anchor.BN> => {
+  //XXX better check if txid is really from a next CALL option vault
+  return getMakerNextPutOptionVaultIdFromTx(program, connection, txid)
 }
 
 export const getCallOptionVaultFactoryPdaAddress = async (

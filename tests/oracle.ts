@@ -16,7 +16,7 @@ const ANCHOR_FREEZE_SECONDS = 30 * 60;
 const STEP_SAMPLE_SIZE = 30;
 
 // SHOULD BE false on mainnet and localnet!
-const DEVNET_MODE = false;
+const DEVNET_MODE = true;
 
 var devnetMockMintTranslator = undefined
 if (DEVNET_MODE) {
