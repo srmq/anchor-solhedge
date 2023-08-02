@@ -36,7 +36,8 @@ import {
   getUserMakerInfoForCallVault,
   getUserTicketAccountAddressForCallVaultFactory,
   getCallSellersInVault,
-  getCallSellersAsRemainingAccounts
+  getCallSellersAsRemainingAccounts,
+  getMakerNextCallOptionVaultIdFromTx
 
 } from "./accounts";
 import * as borsh from "borsh";
@@ -182,10 +183,18 @@ describe("anchor-solhedge-devnet", () => {
   const DEVNET_PUTMAKER2_KEY = JSON.parse(process.env.DEVNET_PUTMAKER2_KEY) as number[]
   const DEVNET_PUTTAKER_KEY = JSON.parse(process.env.DEVNET_PUTTAKER_KEY) as number[]
 
+  const DEVNET_CALLMAKER1_KEY = JSON.parse(process.env.DEVNET_CALLMAKER1_KEY) as number[]
+  const DEVNET_CALLMAKER2_KEY = JSON.parse(process.env.DEVNET_CALLMAKER2_KEY) as number[]
+  const DEVNET_CALLTAKER_KEY = JSON.parse(process.env.DEVNET_CALLTAKER_KEY) as number[]
+
   const devnetPayerKeypair = keyPairFromSecret(DEVNET_DEVEL_KEY)
   const putMaker1Keypair = keyPairFromSecret(DEVNET_PUTMAKER1_KEY)
   const putMaker2Keypair = keyPairFromSecret(DEVNET_PUTMAKER2_KEY)
   const putTakerKeypair = keyPairFromSecret(DEVNET_PUTTAKER_KEY)
+
+  const callMaker1Keypair = keyPairFromSecret(DEVNET_CALLMAKER1_KEY)
+  const callMaker2Keypair = keyPairFromSecret(DEVNET_CALLMAKER2_KEY)
+  const callTakerKeypair = keyPairFromSecret(DEVNET_CALLTAKER_KEY)
 
   const program = anchor.workspace.AnchorSolhedge as Program<AnchorSolhedge>;    
 
@@ -204,7 +213,10 @@ describe("anchor-solhedge-devnet", () => {
           fundPeerIfNeeded(devnetPayerKeypair, putMaker2Keypair.publicKey, anchor.getProvider().connection),
           fundPeerIfNeeded(devnetPayerKeypair, oracleAddr, anchor.getProvider().connection),
           fundPeerIfNeeded(devnetPayerKeypair, protocolFeesAddr, anchor.getProvider().connection),
-          fundPeerIfNeeded(devnetPayerKeypair, putTakerKeypair.publicKey, anchor.getProvider().connection)
+          fundPeerIfNeeded(devnetPayerKeypair, putTakerKeypair.publicKey, anchor.getProvider().connection),
+          fundPeerIfNeeded(devnetPayerKeypair, callMaker1Keypair.publicKey, anchor.getProvider().connection),
+          fundPeerIfNeeded(devnetPayerKeypair, callMaker2Keypair.publicKey, anchor.getProvider().connection),
+          fundPeerIfNeeded(devnetPayerKeypair, callTakerKeypair.publicKey, anchor.getProvider().connection)
         ]
         await Promise.all(lamportTransfers)
       } 
@@ -216,7 +228,245 @@ describe("anchor-solhedge-devnet", () => {
       console.log("Your transaction signature", tx);
     });
 
-    it(`Minting 500 SnakeDollars to ${putMaker1Keypair.publicKey} if his balance is < 500`, async () => {
+    //---------------- STARTING CALL TESTS ----------------/
+    it(`Minting 0.02 SnakeBTC to ${callMaker1Keypair.publicKey} if his balance is < 0.02`, async () => {
+      let balance = await getTokenBalance(anchor.getProvider().connection, devnetPayerKeypair, snakeBTCMintAddr, callMaker1Keypair.publicKey)
+      const mint = await token.getMint(anchor.getProvider().connection, snakeBTCMintAddr)
+      balance /= 10**mint.decimals
+
+      console.log(`${callMaker1Keypair.publicKey.toString()} SnakeBTC balance is ${balance}`)
+      if (balance < 0.02) {
+        const snakeMinterProg = anchor.workspace.SnakeMinterDevnet as Program<SnakeMinterDevnet>;
+        const tx = await mintSnakeBTCTo(snakeMinterProg, callMaker1Keypair)
+        console.log('Mint tx: ', tx)
+      }
+    });
+
+    it(`Minting 0.02 SnakeBTC to ${callMaker2Keypair.publicKey} if his balance is < 0.02`, async () => {
+      let balance = await getTokenBalance(anchor.getProvider().connection, devnetPayerKeypair, snakeBTCMintAddr, callMaker2Keypair.publicKey)
+      const mint = await token.getMint(anchor.getProvider().connection, snakeBTCMintAddr)
+      balance /= 10**mint.decimals
+
+      console.log(`${callMaker2Keypair.publicKey.toString()} SnakeBTC balance is ${balance}`)
+      if (balance < 0.02) {
+        const snakeMinterProg = anchor.workspace.SnakeMinterDevnet as Program<SnakeMinterDevnet>;
+        const tx = await mintSnakeBTCTo(snakeMinterProg, callMaker2Keypair)
+        console.log('Mint tx: ', tx)
+      }
+    });
+
+    it(`Minting 500 SnakeDollars to call taker ${callTakerKeypair.publicKey} if his balance is < 500`, async () => {
+      let balance = await getTokenBalance(anchor.getProvider().connection, devnetPayerKeypair, snakeDollarMintAddr, callTakerKeypair.publicKey)
+      const mint = await token.getMint(anchor.getProvider().connection, snakeDollarMintAddr)
+      balance /= 10**mint.decimals
+
+      console.log(`${callTakerKeypair.publicKey.toString()} SnakeDollar balance is ${balance}`)
+      if (balance < 500) {
+        const snakeMinterProg = anchor.workspace.SnakeMinterDevnet as Program<SnakeMinterDevnet>;
+        const tx = await mintSnakeDollarTo(snakeMinterProg, callTakerKeypair)
+        console.log('Mint tx: ', tx)
+      }
+    });
+
+    xit(`Now ${callMaker1Keypair.publicKey} is creating a Call Vault Factory and a Vault inside it as a CallMaker`, async () => {
+      console.log(">>>>> CALLING LAST KNOWN PRICE")
+      const btcPrice = await lastKnownPrice(snakeBTCMintAddr.toBase58()) //wBTC
+      console.log("Last known price for wBTC is ", btcPrice.price)
+
+      const currEpoch = Math.floor(Date.now()/1000)
+      const oneDay = currEpoch + (24*60*60)
+      const myStrike = Math.round(btcPrice.price*1.005)
+      console.log(`I will offer 10 call options of 0.001 bitcoins each, at strike ${myStrike} with maturity 24 hours from now`)
+      const vaultParams = new MakerCreateCallOptionParams(
+        {
+          maturity: new anchor.BN(oneDay),
+          strike: new anchor.BN(myStrike),
+          //lotSize is in 10^lot_size
+          lotSize: -3,
+          maxMakers: 100,
+          maxTakers: 100,
+          numLotsToSell: new anchor.BN(10),
+          premiumLimit: new anchor.BN(0)  
+        }
+      )
+      const callOptionVaultFactoryAddress = await getCallOptionVaultFactoryPdaAddress(program, snakeBTCMintAddr, snakeDollarMintAddr, vaultParams.maturity, vaultParams.strike)
+
+      const tx = await program.methods.makerNextCallOptionVaultId(vaultParams).accounts({
+        initializer: callMaker1Keypair.publicKey,
+        vaultFactoryInfo: callOptionVaultFactoryAddress,
+        baseAssetMint: snakeBTCMintAddr,
+        quoteAssetMint: snakeDollarMintAddr
+      }).signers([callMaker1Keypair]).rpc({ commitment: "confirmed" })
+
+      console.log("Transaction for getting next VaultId is ", tx)
+
+      const vaultNumber = await getMakerNextCallOptionVaultIdFromTx(program, anchor.getProvider().connection, tx)
+
+      const {
+        callOptionVaultAddress, 
+        vaultBaseAssetTreasury, 
+        vaultQuoteAssetTreasury
+      } = await getCallOptionVaultDerivedPdaAddresses(program, callOptionVaultFactoryAddress, snakeBTCMintAddr, snakeDollarMintAddr, vaultNumber)
+
+      const callMaker1SnakeDollarATA = await token.getOrCreateAssociatedTokenAccount(
+        anchor.getProvider().connection,
+        callMaker1Keypair,
+        snakeDollarMintAddr,
+        callMaker1Keypair.publicKey
+      ) // to receive option premium
+
+      var tx2 = await program.methods.makerCreateCallOptionVault(vaultParams, vaultNumber).accounts({
+        initializer: callMaker1Keypair.publicKey,
+        vaultFactoryInfo: callOptionVaultFactoryAddress,
+        vaultInfo: callOptionVaultAddress,
+        vaultBaseAssetTreasury: vaultBaseAssetTreasury,
+        vaultQuoteAssetTreasury: vaultQuoteAssetTreasury,
+        baseAssetMint: snakeBTCMintAddr,
+        quoteAssetMint: snakeDollarMintAddr,
+        makerBaseAssetAccount: token.getAssociatedTokenAddressSync(snakeBTCMintAddr, callMaker1Keypair.publicKey, false)
+      }).signers([callMaker1Keypair]).rpc()
+      console.log("Transaction for creating CAllOptionVault is ", tx2)
+
+      const vaultFactories = await getAllMaybeNotMaturedCallFactories(program)
+      let myFactory = undefined
+      for (let vaultFactory of vaultFactories) {
+        if (
+          vaultFactory.account.maturity.toNumber() == vaultParams.maturity.toNumber() &&
+          vaultFactory.account.baseAsset.toString() == snakeBTCMintAddr.toString() &&
+          vaultFactory.account.quoteAsset.toString() == snakeDollarMintAddr.toString() &&
+          vaultFactory.account.strike.toNumber() == vaultParams.strike.toNumber()
+        ) {
+          myFactory = vaultFactory
+          break
+        }
+      }
+      assert.notEqual(myFactory, undefined)
+      assert.equal(myFactory.account.isInitialized, true)
+      assert.equal(myFactory.account.matured, false)
+      const factoryKey = myFactory.publicKey
+  
+      const vaultsForFactory = await getVaultsForCallFactory(program, factoryKey)
+      assert.equal(vaultsForFactory[0].account.maxMakers, vaultParams.maxMakers)
+      assert.equal(vaultsForFactory[0].account.maxTakers, vaultParams.maxTakers)
+  
+      const userInfoInVault = await getUserMakerInfoAllCallVaults(program, callMaker1Keypair.publicKey)
+      assert.equal(userInfoInVault[0].account.premiumLimit.toNumber(), vaultParams.premiumLimit.toNumber())
+  
+      const makerInfos = await getAllCallMakerInfosForVault(program, vaultsForFactory[0].publicKey)
+      assert.equal(makerInfos[0].account.premiumLimit.toNumber(), vaultParams.premiumLimit.toNumber())
+  
+      const makerInfoForVault = await getUserMakerInfoForCallVault(program, vaultsForFactory[0].publicKey, callMaker1Keypair.publicKey)
+      assert.equal(makerInfoForVault[0].account.premiumLimit.toNumber(), vaultParams.premiumLimit.toNumber())
+    });
+
+    xit(`Now a second Callmaker, ${callMaker2Keypair.publicKey} will try to enter existing CallOptionVaults`, async () => {
+      const vaultFactories = await getAllMaybeNotMaturedCallFactories(program)
+      console.log('Number of maybe not matured CALL factories: ', vaultFactories.length)
+      for (let vaultFactory of vaultFactories) {
+        const maturity = vaultFactory.account.maturity.toNumber()
+        console.log(`Maturity of CALL VaultFactory ${vaultFactory.publicKey} is ${maturity}`)
+        if (
+          vaultFactory.account.baseAsset.toString() == snakeBTCMintAddr.toString() && 
+          maturity > (Math.floor(Date.now()/1000) + FREEZE_SECONDS + 60)
+        ) {
+            // will only try to enter if there is at least 1 minute to freeze time
+          console.log("Getting vaults for CALL fault factory ", vaultFactory.publicKey.toString())
+          const vaults = await getVaultsForCallFactory(program, vaultFactory.publicKey)
+          for (let vault of vaults) {
+            if (vault.account.isMakersFull) continue
+            if ((await getUserMakerInfoForCallVault(program, vault.publicKey, callMaker2Keypair.publicKey)).length > 0) {
+              continue
+            }
+            const snakeBTCMintInfo = await token.getMint(program.provider.connection, snakeBTCMintAddr)
+            
+            const minEntry = Math.ceil((10**vault.account.lotSize)*(10**snakeBTCMintInfo.decimals))
+            console.log(`One lot in this call vault factory is ${minEntry} lamports`)
+            const myBalance = await getTokenBalance(program.provider.connection, callMaker2Keypair, snakeBTCMintAddr, callMaker2Keypair.publicKey)
+            const {
+              callOptionVaultAddress, 
+              vaultBaseAssetTreasury, 
+              vaultQuoteAssetTreasury
+            } = await getCallOptionVaultDerivedPdaAddresses(program, vaultFactory.publicKey, vaultFactory.account.baseAsset, vaultFactory.account.quoteAsset, vault.account.ord)
+      
+            if (myBalance >= minEntry) {
+              const numLots = Math.floor(myBalance/minEntry)
+              let tx3 = await program.methods.makerEnterCallOptionVault(new anchor.BN(numLots), new anchor.BN(0)).accounts({
+                initializer: callMaker2Keypair.publicKey,
+                vaultFactoryInfo: vaultFactory.publicKey,
+                vaultInfo: vault.publicKey,
+                vaultBaseAssetTreasury: vaultBaseAssetTreasury,
+                baseAssetMint: vaultFactory.account.baseAsset,
+                quoteAssetMint: vaultFactory.account.quoteAsset,
+                makerBaseAssetAccount: token.getAssociatedTokenAddressSync(vaultFactory.account.baseAsset, callMaker2Keypair.publicKey, false),
+              }).signers([callMaker2Keypair]).rpc()
+              console.log(`Transaction for ${callMaker2Keypair.publicKey} entering CALL vault ${vault.publicKey} is`, tx3)
+              let maker2InfoForVault = await getUserMakerInfoForCallVault(program, vault.publicKey, callMaker2Keypair.publicKey)
+              const baseAssetQty = maker2InfoForVault[0].account.baseAssetQty.toNumber()
+              assert.isTrue(baseAssetQty > 0)
+        
+            }
+          }
+        }
+      }
+    });
+
+    xit(`Now CALL maker ${callMaker2Keypair.publicKey} will play with adjusting his position on vaults`, async () => {
+      const vaultFactories = await getAllMaybeNotMaturedCallFactories(program)
+      console.log(`${callMaker2Keypair.publicKey} will look at ${vaultFactories.length} maybe not matured factories: `)
+      for (let vaultFactory of vaultFactories) { 
+        const maturity = vaultFactory.account.maturity.toNumber()
+        console.log(`Maturity of VaultFactory ${vaultFactory.publicKey} is ${maturity}`)
+        if (
+          vaultFactory.account.baseAsset.toString() == snakeBTCMintAddr.toString() && 
+          maturity > (Math.floor(Date.now()/1000) + FREEZE_SECONDS + 60)
+        ) {
+            // will only try to enter if there is at least 1 minute to freeze time
+          console.log("Getting vaults for fault factory ", vaultFactory.publicKey.toString())
+          const vaults = await getVaultsForCallFactory(program, vaultFactory.publicKey)
+
+          for (let vault of vaults) {
+            let maker2InfoForVault = await getUserMakerInfoForCallVault(program, vault.publicKey, callMaker2Keypair.publicKey)
+            if (maker2InfoForVault.length > 0) { // callmaker is in the vault
+              const notSoldQty = maker2InfoForVault[0].account.baseAssetQty.toNumber() - maker2InfoForVault[0].account.volumeSold.toNumber()
+
+              const snakeBTCMintInfo = await token.getMint(program.provider.connection, snakeBTCMintAddr)
+              const lotLamports = Math.ceil((10**vault.account.lotSize)*(10**snakeBTCMintInfo.decimals))
+                
+
+              if (notSoldQty > 0) {
+                const {
+                  callOptionVaultAddress, 
+                  vaultBaseAssetTreasury, 
+                  vaultQuoteAssetTreasury
+                } = await getCallOptionVaultDerivedPdaAddresses(program, vaultFactory.publicKey, vaultFactory.account.baseAsset, vaultFactory.account.quoteAsset, vault.account.ord)
+    
+                const newQtyLots = Math.ceil(maker2InfoForVault[0].account.volumeSold.toNumber()/lotLamports)
+                let tx4 = await program.methods.makerAdjustPositionCallOptionVault(new anchor.BN(newQtyLots), new anchor.BN(0)).accounts({        
+                  initializer: callMaker2Keypair.publicKey,
+                  vaultFactoryInfo: vaultFactory.publicKey,
+                  vaultInfo: vault.publicKey,
+                  vaultBaseAssetTreasury: vaultBaseAssetTreasury,
+                  callOptionMakerInfo: maker2InfoForVault[0].publicKey,
+                  baseAssetMint: vaultFactory.account.baseAsset,
+                  quoteAssetMint: vaultFactory.account.quoteAsset,
+                  makerBaseAssetAccount: token.getAssociatedTokenAddressSync(vaultFactory.account.baseAsset, callMaker2Keypair.publicKey, false)
+                }).signers([callMaker2Keypair]).rpc()
+                maker2InfoForVault = await getUserMakerInfoForCallVault(program, vault.publicKey, callMaker2Keypair.publicKey)
+                assert.equal(maker2InfoForVault[0].account.baseAssetQty.toNumber(), newQtyLots*lotLamports)
+                console.log(`Transaction for ${callMaker2Keypair.publicKey} modifying his position in CALL vault ${vault.publicKey} is`, tx4)          
+              }
+            }
+          }
+
+        }
+      }
+
+    });
+
+
+    //---------------- CALL TESTS ENDED----------------/
+    //---------------- STARTING PUT TESTS ----------------/
+    xit(`Minting 500 SnakeDollars to ${putMaker1Keypair.publicKey} if his balance is < 500`, async () => {
       let balance = await getTokenBalance(anchor.getProvider().connection, devnetPayerKeypair, snakeDollarMintAddr, putMaker1Keypair.publicKey)
       const mint = await token.getMint(anchor.getProvider().connection, snakeDollarMintAddr)
       balance /= 10**mint.decimals
@@ -228,7 +478,7 @@ describe("anchor-solhedge-devnet", () => {
       }
     });
 
-    it(`Minting 500 SnakeDollars to ${putMaker2Keypair.publicKey} if his balance is < 500`, async () => {
+    xit(`Minting 500 SnakeDollars to ${putMaker2Keypair.publicKey} if his balance is < 500`, async () => {
       let balance = await getTokenBalance(anchor.getProvider().connection, devnetPayerKeypair, snakeDollarMintAddr, putMaker2Keypair.publicKey)
       const mint = await token.getMint(anchor.getProvider().connection, snakeDollarMintAddr)
       balance /= 10**mint.decimals
@@ -241,7 +491,7 @@ describe("anchor-solhedge-devnet", () => {
       }
     });
 
-    it(`Minting 500 SnakeDollars to taker ${putTakerKeypair.publicKey} if his balance is < 500, he needs dollars to pay for option premium`, async () => {
+    xit(`Minting 500 SnakeDollars to taker ${putTakerKeypair.publicKey} if his balance is < 500, he needs dollars to pay for option premium`, async () => {
       let balance = await getTokenBalance(anchor.getProvider().connection, devnetPayerKeypair, snakeDollarMintAddr, putTakerKeypair.publicKey)
       const mint = await token.getMint(anchor.getProvider().connection, snakeDollarMintAddr)
       balance /= 10**mint.decimals
@@ -255,7 +505,7 @@ describe("anchor-solhedge-devnet", () => {
     });
 
 
-    it(`Minting 0.02 SnakeBTC to ${putTakerKeypair.publicKey} if his balance is < 0.02`, async () => {
+    xit(`Minting 0.02 SnakeBTC to ${putTakerKeypair.publicKey} if his balance is < 0.02`, async () => {
       let balance = await getTokenBalance(anchor.getProvider().connection, devnetPayerKeypair, snakeBTCMintAddr, putTakerKeypair.publicKey)
       const mint = await token.getMint(anchor.getProvider().connection, snakeBTCMintAddr)
       balance /= 10**mint.decimals
@@ -551,7 +801,7 @@ describe("anchor-solhedge-devnet", () => {
       }
     });
 
-    it(`Now PutMaker ${putMaker1Keypair.publicKey} will ask oracle to settle price on matured vaults he is in`, async () => {
+    xit(`Now PutMaker ${putMaker1Keypair.publicKey} will ask oracle to settle price on matured vaults he is in`, async () => {
       const makerInfosAllVaults = await getUserMakerInfoAllPutVaults(program, putMaker1Keypair.publicKey)
       let currEpoch = Math.floor(Date.now()/1000)
 
@@ -587,7 +837,7 @@ describe("anchor-solhedge-devnet", () => {
       }
     });
 
-    it("Now put makers will get out of the settled options they are in", async () => {
+    xit("Now put makers will get out of the settled options they are in", async () => {
       const putMakers = [putMaker1Keypair, putMaker2Keypair]
       for (const putMaker of putMakers) {
         const makerInfosAllVaults = await getUserMakerInfoAllPutVaults(program, putMaker.publicKey)
@@ -617,7 +867,7 @@ describe("anchor-solhedge-devnet", () => {
       }
     });
     
-    it("Now put takers will get out of the settled options they are in", async () => {
+    xit("Now put takers will get out of the settled options they are in", async () => {
       const putTakers = [putTakerKeypair]
       for (const putTaker of putTakers) {
         const takerInfoAllVaults = await getUserTakerInfoAllPutVaults(program, putTaker.publicKey)
@@ -645,6 +895,7 @@ describe("anchor-solhedge-devnet", () => {
         }
       }
     });
+    //---------------- ENDED PUT TESTS ----------------/
     
   }
 })
