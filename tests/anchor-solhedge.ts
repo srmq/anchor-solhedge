@@ -39,7 +39,8 @@ import {
   getCallSellersAsRemainingAccounts,
   getMakerNextCallOptionVaultIdFromTx,
   getUserTakerInfoForCallVault,
-  getUserSettleTicketAccountAddressForCallVaultFactory
+  getUserSettleTicketAccountAddressForCallVaultFactory,
+  getUserTakerInfoAllCallVaults
 } from "./accounts";
 import * as borsh from "borsh";
 import { getOraclePubKey, _testInitializeOracleAccount, updatePutOptionFairPrice, lastKnownPrice, updateCallOptionFairPrice } from "./oracle";
@@ -464,7 +465,7 @@ describe("anchor-solhedge-devnet", () => {
 
     });
 
-    xit("A CALL taker will now try to find vaults where he can enter", async () => {
+    it("A CALL taker will now try to find vaults where he can enter", async () => {
       const slippageTolerance = 0.05      
       const vaultFactories = await getAllMaybeNotMaturedCallFactories(program)
       console.log(`CallTaker ${callTakerKeypair.publicKey} will look at ${vaultFactories.length} maybe not matured CALL factories: `)
@@ -556,7 +557,7 @@ describe("anchor-solhedge-devnet", () => {
       }
     });
 
-    it(`Now CallMaker ${callMaker1Keypair.publicKey} will ask oracle to settle price on matured vaults he is in`, async () => {
+    xit(`Now CallMaker ${callMaker1Keypair.publicKey} will ask oracle to settle price on matured vaults he is in`, async () => {
       const makerInfosAllVaults = await getUserMakerInfoAllCallVaults(program, callMaker1Keypair.publicKey)
       let currEpoch = Math.floor(Date.now()/1000)
 
@@ -590,7 +591,67 @@ describe("anchor-solhedge-devnet", () => {
           console.log('Transaction where oracle updated settle price for call vault factory was ', tx7)
         }
       }
+    });
+
+    xit("Now call makers will get out of the settled options they are in", async () => {
+      const callMakers = [callMaker1Keypair, callMaker2Keypair]
+      for (const callMaker of callMakers) {
+        const makerInfosAllVaults = await getUserMakerInfoAllCallVaults(program, callMaker.publicKey)
+        for (const makerInfo of makerInfosAllVaults) { 
+          const vaultAddr = makerInfo.account.callOptionVault
+          const vaultInfo = await program.account.callOptionVaultInfo.fetch(vaultAddr)
+          const vaultFactoryInfo = await program.account.callOptionVaultFactoryInfo.fetch(vaultInfo.factoryVault)
+          const quoteAssetATAAddr = await createTokenAccount(anchor.getProvider().connection, devnetPayerKeypair, vaultFactoryInfo.quoteAsset, callMaker.publicKey)
+          if (vaultFactoryInfo.matured && !makerInfo.account.isSettled) {
+            console.log(`Call maker ${callMaker.publicKey} will get out of settled option vault ${vaultAddr}`)
+            let tx = await program.methods.makerSettleCallOption().accounts({
+              baseAssetMint: vaultFactoryInfo.baseAsset,
+              initializer: callMaker.publicKey,
+              makerBaseAssetAccount: token.getAssociatedTokenAddressSync(vaultFactoryInfo.baseAsset, callMaker.publicKey, false),
+              makerQuoteAssetAccount: quoteAssetATAAddr.address, 
+              callOptionMakerInfo: makerInfo.publicKey,
+              quoteAssetMint: vaultFactoryInfo.quoteAsset,
+              vaultBaseAssetTreasury: token.getAssociatedTokenAddressSync(vaultFactoryInfo.baseAsset, vaultAddr, true),
+              vaultFactoryInfo: vaultInfo.factoryVault,
+              vaultInfo: vaultAddr,
+              vaultQuoteAssetTreasury: token.getAssociatedTokenAddressSync(vaultFactoryInfo.quoteAsset, vaultAddr, true)
+            }).signers([callMaker]).rpc()
+            console.log("Transaction id that settled call option for maker: ", tx)
+          }
+        }
+        
+      }
     });    
+
+    it("Now call takers will get out of the settled options they are in", async () => {
+      const callTakers = [callTakerKeypair]
+      for (const callTaker of callTakers) {
+        const takerInfoAllVaults = await getUserTakerInfoAllCallVaults(program, callTaker.publicKey)
+        for (const takerInfo of takerInfoAllVaults) {
+          const vaultAddr = takerInfo.account.callOptionVault
+          const vaultInfo = await program.account.callOptionVaultInfo.fetch(vaultAddr)
+          const vaultFactoryInfo = await program.account.callOptionVaultFactoryInfo.fetch(vaultInfo.factoryVault)
+          const takerBaseAssetATA = await createTokenAccount(anchor.getProvider().connection, devnetPayerKeypair, vaultFactoryInfo.baseAsset, callTaker.publicKey)
+          if (vaultFactoryInfo.matured && !takerInfo.account.isSettled) {
+            console.log(`Call taker ${callTaker.publicKey} will get of option vault ${vaultAddr}`)
+            let tx = await program.methods.takerSettleCallOption().accounts({
+              baseAssetMint: vaultFactoryInfo.baseAsset,
+              initializer: callTaker.publicKey,
+              callOptionTakerInfo: takerInfo.publicKey,
+              quoteAssetMint: vaultFactoryInfo.quoteAsset,
+              takerBaseAssetAccount: takerBaseAssetATA.address,
+              takerQuoteAssetAccount: token.getAssociatedTokenAddressSync(vaultFactoryInfo.quoteAsset, callTaker.publicKey, false),
+              vaultBaseAssetTreasury: token.getAssociatedTokenAddressSync(vaultFactoryInfo.baseAsset, vaultAddr, true),
+              vaultFactoryInfo: vaultInfo.factoryVault,
+              vaultInfo: vaultAddr,
+              vaultQuoteAssetTreasury: token.getAssociatedTokenAddressSync(vaultFactoryInfo.quoteAsset, vaultAddr, true)
+            }).signers([callTaker]).rpc()
+            console.log("Transaction id that settled call option for taker: ", tx)
+          }
+        }
+      }
+    });
+
 
     //---------------- CALL TESTS ENDED----------------/
     //---------------- STARTING PUT TESTS ----------------/

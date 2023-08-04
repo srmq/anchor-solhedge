@@ -646,7 +646,6 @@ pub struct TakerAdjustFundingPutOptionVault<'info> {
         constraint = vault_factory_info.is_initialized == true,
         constraint = vault_factory_info.matured == false,
         constraint = vault_factory_info.base_asset == base_asset_mint.key(),
-        constraint = vault_factory_info.quote_asset == quote_asset_mint.key(),
         constraint = vault_factory_info.emergency_mode == false
     )]
     pub vault_factory_info: Account<'info, PutOptionVaultFactoryInfo>,
@@ -677,9 +676,6 @@ pub struct TakerAdjustFundingPutOptionVault<'info> {
 
     // mint for the base_asset
     pub base_asset_mint: Account<'info, Mint>,
-
-    // mint for the quote asset
-    pub quote_asset_mint: Account<'info, Mint>,
 
     #[account(
         mut,

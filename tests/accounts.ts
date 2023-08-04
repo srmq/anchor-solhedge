@@ -367,6 +367,30 @@ export const getUserTakerInfoAllPutVaults = async(
 
 }
 
+export const getUserTakerInfoAllCallVaults = async(
+  program: anchor.Program<AnchorSolhedge>,
+  userAddress: anchor.web3.PublicKey,
+) => {
+
+  const filter = [
+    {
+      memcmp: {
+        offset: 8 + // Discriminator
+                1 + // is_initialized: bool,
+                2 + // ord: u16
+                8 + // max_quote_asset: u64
+                8 + // qty_deposited: u64
+                1, // is_settled: bool
+        bytes: userAddress.toBase58()
+      },
+    },
+  ]
+  const res = program.account.callOptionTakerInfo.all(filter)
+  return res
+
+}
+
+
 
 export const getUserTakerInfoForPutVault = async(
   program: anchor.Program<AnchorSolhedge>,

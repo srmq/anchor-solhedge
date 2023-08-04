@@ -83,7 +83,13 @@ pub mod anchor_solhedge {
         pub base_asset_transfer: u64,
         pub quote_asset_transfer: u64
     }
-    
+
+    #[derive(AnchorSerialize, AnchorDeserialize)]
+    pub struct CallOptionSettleReturn {
+        pub settle_result: CallOptionSettleResult,
+        pub base_asset_transfer: u64,
+        pub quote_asset_transfer: u64
+    }
 
     #[derive(AnchorSerialize, AnchorDeserialize, Clone)]
     pub enum PutOptionSettleResult {
@@ -91,6 +97,14 @@ pub mod anchor_solhedge {
         FullyExercised,
         PartiallyExercised
     }
+
+    #[derive(AnchorSerialize, AnchorDeserialize, Clone)]
+    pub enum CallOptionSettleResult {
+        NotExercised,
+        FullyExercised,
+        PartiallyExercised
+    }
+
 
     pub fn initialize(_ctx: Context<Initialize>) -> Result<()> {
         Ok(())
@@ -243,6 +257,36 @@ pub mod anchor_solhedge {
         settle_price: u64
     ) -> Result<()> {
         co::oracle_update_call_option_settle_price(ctx, settle_price)
+    }
+
+    pub fn maker_settle_call_option(ctx: Context<MakerSettleCallOption>) -> Result<CallOptionSettleReturn> {
+        co::maker_settle_call_option(ctx)
+    }
+
+    pub fn taker_settle_call_option(ctx: Context<TakerSettleCallOption>) -> Result<CallOptionSettleReturn> {
+        co::taker_settle_call_option(ctx)
+    }
+
+    pub fn maker_activate_call_option_emergency_mode(ctx: Context<MakerActivateCallOptionEmergencyMode>) -> Result<()> {
+        co::maker_activate_call_option_emergency_mode(ctx)
+    }    
+
+    pub fn taker_activate_call_option_emergency_mode(ctx: Context<TakerActivateCallOptionEmergencyMode>) -> Result<()> {
+        co::taker_activate_call_option_emergency_mode(ctx)
+    }   
+
+    pub fn maker_call_option_emergency_exit(ctx: Context<MakerCallOptionEmergencyExit>) -> Result<()> {     
+        co::maker_call_option_emergency_exit(ctx)
+    }
+
+    pub fn taker_call_option_emergency_exit(ctx: Context<TakerCallOptionEmergencyExit>) -> Result<()> {
+        co::taker_call_option_emergency_exit(ctx)
+    }
+
+    pub fn taker_adjust_funding_call_option_vault(ctx: Context<TakerAdjustFundingCallOptionVault>,
+        new_funding: u64
+    ) -> Result<u64> {
+        co::taker_adjust_funding_call_option_vault(ctx, new_funding)
     }
     //----------- END CALL OPTIONS FAÇADE ------------------------------/
 

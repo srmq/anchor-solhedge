@@ -9,7 +9,8 @@ use crate::{
     MAX_SECONDS_FROM_LAST_FAIR_PRICE_UPDATE,
     PROTOCOL_TOTAL_FEES,
     FRONTEND_SHARE,
-    LAMPORTS_FOR_UPDATE_SETTLEPRICE_TICKET
+    LAMPORTS_FOR_UPDATE_SETTLEPRICE_TICKET,
+    EMERGENCY_MODE_GRACE_PERIOD
 };
 use anchor_spl::token::{self, Transfer, TokenAccount};
 use crate::anchor_solhedge::*;
@@ -669,4 +670,387 @@ pub fn oracle_update_call_option_settle_price(
 
     Ok(())
 
+}
+
+pub fn maker_settle_call_option(ctx: Context<MakerSettleCallOption>) -> Result<CallOptionSettleReturn> {
+    let current_time = Clock::get().unwrap().unix_timestamp as u64;
+    require!(
+        ctx.accounts.vault_factory_info.maturity < current_time,
+        CallOptionError::IllegalState  // should not have passed maturity test, must never happen
+    );
+
+
+    let mut result = CallOptionSettleReturn {
+        base_asset_transfer: 0,
+        quote_asset_transfer: 0,
+        settle_result: CallOptionSettleResult::NotExercised
+    };
+
+    msg!("Price settled at {}, while strike was {}", ctx.accounts.vault_factory_info.settled_price, ctx.accounts.vault_factory_info.strike);    
+    if ctx.accounts.vault_factory_info.settled_price <= ctx.accounts.vault_factory_info.strike {
+        msg!("Call option is not favorable to taker, will NOT be exercised");
+        // i.e. maker gets her deposited base assets back
+        result.settle_result = CallOptionSettleResult::NotExercised;
+        // Proceed to transfer 
+        let cpi_program = ctx.accounts.token_program.to_account_info();
+        let cpi_accounts = Transfer {
+            from: ctx.accounts.vault_base_asset_treasury.to_account_info(),
+            to: ctx.accounts.maker_base_asset_account.to_account_info(),
+            authority: ctx.accounts.vault_info.to_account_info(),
+        };
+
+        // Preparing PDA signer
+        let auth_bump = *ctx.bumps.get("vault_info").unwrap();
+        let seeds = &[
+            "CallOptionVaultInfo".as_bytes().as_ref(), 
+            &ctx.accounts.vault_factory_info.key().to_bytes(),
+            &ctx.accounts.vault_info.ord.to_le_bytes(),
+            &[auth_bump],
+        ];
+        let signer = &[&seeds[..]];
+
+
+        let token_transfer_context = CpiContext::new_with_signer(cpi_program, cpi_accounts, signer);
+
+        token::transfer(token_transfer_context, ctx.accounts.call_option_maker_info.base_asset_qty)?;
+
+        result.base_asset_transfer = ctx.accounts.call_option_maker_info.base_asset_qty;
+        result.quote_asset_transfer = 0;
+    } else {
+        msg!("Call option is favorable to taker, WILL be exercised");
+        // maker will sell up to the limit of ctx.accounts.call_option_maker_info.volume_sold
+        // however as takers may have insufficiently funded their options, the maker
+        // may eventually sell less, in a first settle first served base
+        
+        let total_deposited_base_lamports_value_f64 = (ctx.accounts.vault_info.takers_total_deposited as f64) / (ctx.accounts.vault_factory_info.strike as f64)*10.0f64.powf(ctx.accounts.base_asset_mint.decimals as f64);
+        require!(
+            total_deposited_base_lamports_value_f64.is_finite(),
+            CallOptionError::Overflow
+        );
+        let total_deposited_base_lamports_value = total_deposited_base_lamports_value_f64.floor() as u64;
+        let total_bonus = ctx.accounts.vault_info.makers_total_pending_settle.checked_sub(total_deposited_base_lamports_value).unwrap();
+        let max_bonus = total_bonus.checked_sub(ctx.accounts.vault_info.bonus_not_exercised).unwrap();
+        let maker_bonus = std::cmp::min(max_bonus, ctx.accounts.call_option_maker_info.volume_sold);
+        let maker_sold_amount = ctx.accounts.call_option_maker_info.volume_sold.checked_sub(maker_bonus).unwrap();
+        let mut transfer_base_asset = ctx.accounts.call_option_maker_info.base_asset_qty.checked_sub(ctx.accounts.call_option_maker_info.volume_sold).unwrap(); // initially unsold base assets
+        if maker_bonus > 0 {
+            transfer_base_asset = transfer_base_asset.checked_add(maker_bonus).unwrap();
+            ctx.accounts.vault_info.bonus_not_exercised = ctx.accounts.vault_info.bonus_not_exercised.checked_add(maker_bonus).unwrap();
+        }
+        if transfer_base_asset > 0 {
+            msg!("Lucky maker! Will only be partially exercised!");
+            result.settle_result = CallOptionSettleResult::PartiallyExercised;
+            // Proceed to transfer 
+            let cpi_program = ctx.accounts.token_program.to_account_info();
+            let cpi_accounts = Transfer {
+                from: ctx.accounts.vault_base_asset_treasury.to_account_info(),
+                to: ctx.accounts.maker_base_asset_account.to_account_info(),
+                authority: ctx.accounts.vault_info.to_account_info(),
+            };
+
+            // Preparing PDA signer
+            let auth_bump = *ctx.bumps.get("vault_info").unwrap();
+            let seeds = &[
+                "CallOptionVaultInfo".as_bytes().as_ref(), 
+                &ctx.accounts.vault_factory_info.key().to_bytes(),
+                &ctx.accounts.vault_info.ord.to_le_bytes(),
+                &[auth_bump],
+            ];
+            let signer = &[&seeds[..]];
+    
+
+            let token_transfer_context = CpiContext::new_with_signer(cpi_program, cpi_accounts, signer);
+
+            token::transfer(token_transfer_context, transfer_base_asset)?;
+            result.base_asset_transfer = transfer_base_asset;
+        } else {
+            msg!("Maker will be fully exercised!");
+            result.settle_result = CallOptionSettleResult::FullyExercised;
+            result.base_asset_transfer = 0;
+        }
+        if maker_sold_amount > 0 {
+            let quote_lamports_f64 = (maker_sold_amount as f64) / 10.0f64.powf(ctx.accounts.base_asset_mint.decimals as f64) * (ctx.accounts.vault_factory_info.strike as f64);
+            require!(
+                quote_lamports_f64.is_finite(),
+                CallOptionError::Overflow
+            );
+            let quote_lamports = quote_lamports_f64.floor() as u64;
+            let cpi_program = ctx.accounts.token_program.to_account_info();
+            let cpi_accounts = Transfer {
+                from: ctx.accounts.vault_quote_asset_treasury.to_account_info(),
+                to: ctx.accounts.maker_quote_asset_account.to_account_info(),
+                authority: ctx.accounts.vault_info.to_account_info(),
+            };
+
+            // Preparing PDA signer
+            let auth_bump = *ctx.bumps.get("vault_info").unwrap();
+            let seeds = &[
+                "CallOptionVaultInfo".as_bytes().as_ref(), 
+                &ctx.accounts.vault_factory_info.key().to_bytes(),
+                &ctx.accounts.vault_info.ord.to_le_bytes(),
+                &[auth_bump],
+            ];
+            let signer = &[&seeds[..]];
+    
+
+            let token_transfer_context = CpiContext::new_with_signer(cpi_program, cpi_accounts, signer);
+
+            token::transfer(token_transfer_context, quote_lamports)?;
+            result.quote_asset_transfer = quote_lamports;
+                
+        }            
+    }
+
+    ctx.accounts.call_option_maker_info.base_asset_qty = 0;
+    ctx.accounts.call_option_maker_info.volume_sold = 0;
+    ctx.accounts.call_option_maker_info.is_settled = true;
+
+    Ok(result)
+}
+
+pub fn taker_settle_call_option(ctx: Context<TakerSettleCallOption>) -> Result<CallOptionSettleReturn> {
+    let current_time = Clock::get().unwrap().unix_timestamp as u64;
+    require!(
+        ctx.accounts.vault_factory_info.maturity < current_time,
+        CallOptionError::IllegalState  // should not have passed maturity test, must never happen
+    );
+
+    let mut result = CallOptionSettleReturn {
+        base_asset_transfer: 0,
+        quote_asset_transfer: 0,
+        settle_result: CallOptionSettleResult::NotExercised
+    };
+
+    msg!("Price settled at {}, while strike was {}", ctx.accounts.vault_factory_info.settled_price, ctx.accounts.vault_factory_info.strike);
+
+    if ctx.accounts.vault_factory_info.settled_price <= ctx.accounts.vault_factory_info.strike {
+        msg!("Call option is not favorable to taker, will NOT be exercised");
+        // i.e. taker gets her deposited quote assets back
+        result.settle_result = CallOptionSettleResult::NotExercised;
+        if ctx.accounts.call_option_taker_info.qty_deposited > 0 {
+            let cpi_program = ctx.accounts.token_program.to_account_info();
+            let cpi_accounts = Transfer {
+                from: ctx.accounts.vault_quote_asset_treasury.to_account_info(),
+                to: ctx.accounts.taker_quote_asset_account.to_account_info(),
+                authority: ctx.accounts.vault_info.to_account_info(),
+            };
+
+            // Preparing PDA signer
+            let auth_bump = *ctx.bumps.get("vault_info").unwrap();
+            let seeds = &[
+                "CallOptionVaultInfo".as_bytes().as_ref(), 
+                &ctx.accounts.vault_factory_info.key().to_bytes(),
+                &ctx.accounts.vault_info.ord.to_le_bytes(),
+                &[auth_bump],
+            ];
+            let signer = &[&seeds[..]];
+    
+
+            let token_transfer_context = CpiContext::new_with_signer(cpi_program, cpi_accounts, signer);
+
+            token::transfer(token_transfer_context, ctx.accounts.call_option_taker_info.qty_deposited)?;
+            result.quote_asset_transfer = ctx.accounts.call_option_taker_info.qty_deposited;
+            result.base_asset_transfer = 0;
+        }
+    } else {
+        msg!("Call option is favorable to taker, WILL be exercised");
+        // i.e. buy base asset at strike price, qty_deposited of quote_asset is available to use
+        //FIXME CONTINUE FROM HERE
+        result.settle_result = CallOptionSettleResult::PartiallyExercised;
+        if ctx.accounts.call_option_taker_info.qty_deposited > 0 {
+            if ctx.accounts.call_option_taker_info.qty_deposited == ctx.accounts.call_option_taker_info.max_quote_asset {
+                result.settle_result = CallOptionSettleResult::FullyExercised;
+            }
+            let qty_deposited_base_lamports_value_f64 = (ctx.accounts.call_option_taker_info.qty_deposited as f64) / (ctx.accounts.vault_factory_info.strike as f64) * 10.0f64.powf(ctx.accounts.base_asset_mint.decimals as f64);
+            require!(
+                qty_deposited_base_lamports_value_f64.is_finite(),
+                CallOptionError::Overflow
+            );
+            let qty_deposited_base_lamports_value = qty_deposited_base_lamports_value_f64.floor() as u64;
+            let cpi_program = ctx.accounts.token_program.to_account_info();
+            let cpi_accounts = Transfer {
+                from: ctx.accounts.vault_base_asset_treasury.to_account_info(),
+                to: ctx.accounts.taker_base_asset_account.to_account_info(),
+                authority: ctx.accounts.vault_info.to_account_info(),
+            };
+
+            // Preparing PDA signer
+            let auth_bump = *ctx.bumps.get("vault_info").unwrap();
+            let seeds = &[
+                "CallOptionVaultInfo".as_bytes().as_ref(), 
+                &ctx.accounts.vault_factory_info.key().to_bytes(),
+                &ctx.accounts.vault_info.ord.to_le_bytes(),
+                &[auth_bump],
+            ];
+            let signer = &[&seeds[..]];
+    
+
+            let token_transfer_context = CpiContext::new_with_signer(cpi_program, cpi_accounts, signer);
+
+            token::transfer(token_transfer_context, qty_deposited_base_lamports_value)?;
+            result.quote_asset_transfer = 0;
+            result.base_asset_transfer = qty_deposited_base_lamports_value;
+        }
+    }
+    ctx.accounts.call_option_taker_info.qty_deposited = 0;
+    ctx.accounts.call_option_taker_info.is_settled = true;
+
+    Ok(result)
+}
+
+pub fn maker_activate_call_option_emergency_mode(ctx: Context<MakerActivateCallOptionEmergencyMode>) -> Result<()> {
+    let current_time = Clock::get().unwrap().unix_timestamp as u64;
+    require!(
+        current_time.checked_sub(ctx.accounts.vault_factory_info.maturity).unwrap() > EMERGENCY_MODE_GRACE_PERIOD,
+        CallOptionError::EmergencyModeTooEarly
+    );
+    
+    ctx.accounts.vault_factory_info.emergency_mode = true;
+
+    Ok(())
+}
+
+pub fn taker_activate_call_option_emergency_mode(ctx: Context<TakerActivateCallOptionEmergencyMode>) -> Result<()> {
+    let current_time = Clock::get().unwrap().unix_timestamp as u64;
+    require!(
+        current_time.checked_sub(ctx.accounts.vault_factory_info.maturity).unwrap() > EMERGENCY_MODE_GRACE_PERIOD,
+        CallOptionError::EmergencyModeTooEarly
+    );
+    
+    ctx.accounts.vault_factory_info.emergency_mode = true;
+
+    Ok(())
+}
+
+pub fn maker_call_option_emergency_exit(ctx: Context<MakerCallOptionEmergencyExit>) -> Result<()> {
+    let cpi_program = ctx.accounts.token_program.to_account_info();
+    let cpi_accounts = Transfer {
+        from: ctx.accounts.vault_base_asset_treasury.to_account_info(),
+        to: ctx.accounts.maker_base_asset_account.to_account_info(),
+        authority: ctx.accounts.vault_info.to_account_info(),
+    };
+
+    // Preparing PDA signer
+    let auth_bump = *ctx.bumps.get("vault_info").unwrap();
+    let seeds = &[
+        "CallOptionVaultInfo".as_bytes().as_ref(), 
+        &ctx.accounts.vault_factory_info.key().to_bytes(),
+        &ctx.accounts.vault_info.ord.to_le_bytes(),
+        &[auth_bump],
+    ];
+    let signer = &[&seeds[..]];
+
+
+    let token_transfer_context = CpiContext::new_with_signer(cpi_program, cpi_accounts, signer);
+
+    token::transfer(token_transfer_context, ctx.accounts.call_option_maker_info.base_asset_qty)?;
+
+    ctx.accounts.call_option_maker_info.base_asset_qty = 0;
+    ctx.accounts.call_option_maker_info.volume_sold = 0;
+    ctx.accounts.call_option_maker_info.is_settled = true;
+
+
+    Ok(())
+}
+
+pub fn taker_call_option_emergency_exit(ctx: Context<TakerCallOptionEmergencyExit>) -> Result<()> {
+    if ctx.accounts.call_option_taker_info.qty_deposited > 0 {
+        let cpi_program = ctx.accounts.token_program.to_account_info();
+        let cpi_accounts = Transfer {
+            from: ctx.accounts.vault_quote_asset_treasury.to_account_info(),
+            to: ctx.accounts.taker_quote_asset_account.to_account_info(),
+            authority: ctx.accounts.vault_info.to_account_info(),
+        };
+
+        // Preparing PDA signer
+        let auth_bump = *ctx.bumps.get("vault_info").unwrap();
+        let seeds = &[
+            "CallOptionVaultInfo".as_bytes().as_ref(), 
+            &ctx.accounts.vault_factory_info.key().to_bytes(),
+            &ctx.accounts.vault_info.ord.to_le_bytes(),
+            &[auth_bump],
+        ];
+        let signer = &[&seeds[..]];
+
+
+        let token_transfer_context = CpiContext::new_with_signer(cpi_program, cpi_accounts, signer);
+
+        token::transfer(token_transfer_context, ctx.accounts.call_option_taker_info.qty_deposited)?;
+    }
+    ctx.accounts.call_option_taker_info.qty_deposited = 0;
+    ctx.accounts.call_option_taker_info.is_settled = true;
+
+    Ok(())
+}    
+
+pub fn taker_adjust_funding_call_option_vault(ctx: Context<TakerAdjustFundingCallOptionVault>,
+    new_funding: u64
+) -> Result<u64> {
+
+    let current_time = Clock::get().unwrap().unix_timestamp as u64;
+    // Period to adjust funding is already closed
+    require!(
+        ctx.accounts.vault_factory_info.maturity > current_time.checked_add(FREEZE_SECONDS).unwrap(),
+        CallOptionError::MaturityTooEarly
+    );
+
+    let mut final_funding = ctx.accounts.call_option_taker_info.qty_deposited;
+    if new_funding > ctx.accounts.call_option_taker_info.qty_deposited {
+        // user wants to increase funding
+        let wanted_increase_amount = new_funding.checked_sub(ctx.accounts.call_option_taker_info.qty_deposited).unwrap();
+        let max_increase_amount = ctx.accounts.call_option_taker_info.max_quote_asset.checked_sub(ctx.accounts.call_option_taker_info.qty_deposited).unwrap();
+        let increase_amount = std::cmp::min(wanted_increase_amount, max_increase_amount);
+        if increase_amount > 0 {
+            {
+                let cpi_program = ctx.accounts.token_program.to_account_info();
+                msg!("Taker started transferring quote assets to increase funding for call option");
+                let cpi_accounts = Transfer {
+                    from: ctx.accounts.taker_quote_asset_account.to_account_info(),
+                    to: ctx.accounts.vault_quote_asset_treasury.to_account_info(),
+                    authority: ctx.accounts.initializer.to_account_info(),
+                };
+                let token_transfer_context = CpiContext::new(cpi_program, cpi_accounts);
+                token::transfer(token_transfer_context, increase_amount)?;
+                msg!("Finished transferring quote assets to increase funding for option");
+            }            
+            final_funding = final_funding.checked_add(increase_amount).unwrap();
+            ctx.accounts.call_option_taker_info.qty_deposited = final_funding;
+            ctx.accounts.vault_info.takers_total_deposited = ctx.accounts.vault_info.takers_total_deposited.checked_add(increase_amount).unwrap();
+        }
+
+    } else if new_funding < ctx.accounts.call_option_taker_info.qty_deposited {
+        let decrease_amount = ctx.accounts.call_option_taker_info.qty_deposited.checked_sub(new_funding).unwrap();
+        // Proceed to transfer 
+        let cpi_program = ctx.accounts.token_program.to_account_info();
+        let cpi_accounts = Transfer {
+            from: ctx.accounts.vault_quote_asset_treasury.to_account_info(),
+            to: ctx.accounts.taker_quote_asset_account.to_account_info(),
+            authority: ctx.accounts.vault_info.to_account_info(),
+        };
+
+        // Preparing PDA signer
+        let auth_bump = *ctx.bumps.get("vault_info").unwrap();
+        let seeds = &[
+            "CallOptionVaultInfo".as_bytes().as_ref(), 
+            &ctx.accounts.vault_factory_info.key().to_bytes(),
+            &ctx.accounts.vault_info.ord.to_le_bytes(),
+            &[auth_bump],
+        ];
+        let signer = &[&seeds[..]];
+
+
+        let token_transfer_context = CpiContext::new_with_signer(cpi_program, cpi_accounts, signer);
+
+        token::transfer(token_transfer_context, decrease_amount)?;
+        final_funding = new_funding;
+        ctx.accounts.call_option_taker_info.qty_deposited = new_funding;
+        ctx.accounts.vault_info.takers_total_deposited = ctx.accounts.vault_info.takers_total_deposited.checked_sub(decrease_amount).unwrap();
+    }
+
+    require!(
+        ctx.accounts.call_option_taker_info.qty_deposited <= ctx.accounts.call_option_taker_info.max_quote_asset,
+        CallOptionError::IllegalState
+    );
+    
+    Ok(final_funding)
 }
