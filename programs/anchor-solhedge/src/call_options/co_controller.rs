@@ -8,7 +8,8 @@ use crate::{
     LAMPORTS_FOR_UPDATE_FAIRPRICE_TICKET,
     MAX_SECONDS_FROM_LAST_FAIR_PRICE_UPDATE,
     PROTOCOL_TOTAL_FEES,
-    FRONTEND_SHARE
+    FRONTEND_SHARE,
+    LAMPORTS_FOR_UPDATE_SETTLEPRICE_TICKET
 };
 use anchor_spl::token::{self, Transfer, TokenAccount};
 use crate::anchor_solhedge::*;
@@ -327,6 +328,33 @@ pub fn maker_adjust_position_call_option_vault(ctx: Context<MakerAdjustPositionC
 
 }
 
+pub fn gen_settle_call_option_price_ticket(ctx: Context<GenSettleCallOptionPriceTicket>) -> Result<()> {
+    require!(
+        ctx.accounts.call_option_settle_price_ticket.is_used == false,
+        CallOptionError::UsedUpdateTicket
+    );
+    let current_time = Clock::get().unwrap().unix_timestamp as u64;
+    require!(
+        ctx.accounts.vault_factory_info.maturity < current_time,
+        CallOptionError::MaturityTooLate
+    );
+
+    msg!("Started transferring lamports to oracle");
+    let oracle_fee_transfer_cpi_context = CpiContext::new(
+        ctx.accounts.system_program.to_account_info(),
+        system_program::Transfer {
+            from: ctx.accounts.initializer.to_account_info(),
+            to: ctx.accounts.oracle_wallet.to_account_info()
+        }
+    );
+    system_program::transfer(oracle_fee_transfer_cpi_context, LAMPORTS_FOR_UPDATE_SETTLEPRICE_TICKET)?;
+    msg!("Finished transferring lamports to oracle");
+
+
+    Ok(())
+}
+
+
 pub fn gen_update_call_option_fair_price_ticket(ctx: Context<GenUpdateCallOptionFairPriceTicket>) -> Result<()> {
     require!(
         ctx.accounts.call_option_fair_price_ticket.is_used == false,
@@ -402,7 +430,7 @@ pub fn taker_buy_lots_call_option_vault<'info>(ctx: Context<'_, '_, '_, 'info, T
     );
 
     // If taker is entering the vault, we initialize her CallOptionTakerInfo
-    // If she already has a CallOptionTakerInfo, she is buying more put options
+    // If she already has a CallOptionTakerInfo, she is buying more call options
     if !ctx.accounts.call_option_taker_info.is_initialized {
         require!(
             !ctx.accounts.vault_info.is_takers_full,
@@ -616,4 +644,29 @@ pub fn taker_buy_lots_call_option_vault<'info>(ctx: Context<'_, '_, '_, 'info, T
         funding_added: quote_asset_transfer_qty
     };
     Ok(result)
+}
+
+pub fn oracle_update_call_option_settle_price(
+    ctx: Context<OracleUpdateCallOptionSettlePrice>,
+    settle_price: u64
+) -> Result<()> {
+    require!(
+        settle_price > 0,
+        CallOptionError::PriceZero
+    );
+    let current_time = Clock::get().unwrap().unix_timestamp as u64;
+    require!(
+        ctx.accounts.vault_factory_info.maturity < current_time,
+        CallOptionError::MaturityTooLate
+    );
+
+    if !ctx.accounts.vault_factory_info.matured {
+        ctx.accounts.vault_factory_info.settled_price = settle_price;
+        ctx.accounts.vault_factory_info.matured = true;
+    }
+
+    ctx.accounts.update_ticket.is_used = true;
+
+    Ok(())
+
 }

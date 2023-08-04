@@ -74,3 +74,9 @@ pub struct CallOptionTakerInfo {
     pub owner: Pubkey,
     pub call_option_vault: Pubkey
 }
+
+#[account]
+pub struct CallOptionSettlePriceTicketInfo {
+    pub is_used: bool,
+    pub factory_vault: Pubkey
+}

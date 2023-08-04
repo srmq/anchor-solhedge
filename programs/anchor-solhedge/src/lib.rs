@@ -233,6 +233,17 @@ pub mod anchor_solhedge {
     ) -> Result<TakerBuyLotsCallOptionReturn> {
         co::taker_buy_lots_call_option_vault(ctx, max_fair_price, num_lots_to_buy, initial_funding)
     }
+
+    pub fn gen_settle_call_option_price_ticket(ctx: Context<GenSettleCallOptionPriceTicket>) -> Result<()> {
+        co::gen_settle_call_option_price_ticket(ctx)
+    }
+
+    pub fn oracle_update_call_option_settle_price(
+        ctx: Context<OracleUpdateCallOptionSettlePrice>,
+        settle_price: u64
+    ) -> Result<()> {
+        co::oracle_update_call_option_settle_price(ctx, settle_price)
+    }
     //----------- END CALL OPTIONS FAÇADE ------------------------------/
 
 }

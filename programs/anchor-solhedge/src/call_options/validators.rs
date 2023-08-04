@@ -5,7 +5,8 @@ use crate::call_options::data::{
     CallOptionVaultInfo,
     CallOptionMakerInfo,
     CallOptionUpdateFairPriceTicketInfo,
-    CallOptionTakerInfo
+    CallOptionTakerInfo,
+    CallOptionSettlePriceTicketInfo
 };
 use anchor_spl::token::{Mint, Token, TokenAccount};
 use anchor_spl::associated_token::AssociatedToken;
@@ -438,5 +439,78 @@ pub struct TakerBuyLotsCallOptionVault<'info> {
     // Token Program required to call transfer instruction
     pub token_program: Program<'info, Token>,
     pub associated_token_program: Program<'info, AssociatedToken>,
+
+}
+
+#[derive(Accounts)]
+pub struct GenSettleCallOptionPriceTicket<'info> {
+    #[account(
+        constraint = vault_factory_info.strike > 0,
+        constraint = vault_factory_info.matured == false,
+        constraint = vault_factory_info.is_initialized == true,
+        constraint = vault_factory_info.emergency_mode == false
+    )]
+    pub vault_factory_info: Account<'info, CallOptionVaultFactoryInfo>,
+
+    #[account(
+        init,
+        seeds=["CallOptionSettlePriceTicketInfo".as_bytes().as_ref(), vault_factory_info.key().as_ref(), initializer.key().as_ref()],
+        bump,
+        payer = initializer,
+        space = std::mem::size_of::<CallOptionSettlePriceTicketInfo>() + 8,
+    )]
+    pub call_option_settle_price_ticket: Account<'info, CallOptionSettlePriceTicketInfo>,
+
+    // Check if initializer is signer, mut is required to reduce lamports (fees)
+    #[account(mut)]
+    pub initializer: Signer<'info>,
+
+    #[account(
+        mut,
+        constraint = oracle_wallet.key() == ORACLE_ADDRESS
+    )]
+    pub oracle_wallet: SystemAccount<'info>,
+
+    // System Program requred for deduction of lamports (fees)
+    pub system_program: Program<'info, System>
+
+}
+
+#[derive(Accounts)]
+#[instruction(
+    settle_price: u64
+)]
+pub struct OracleUpdateCallOptionSettlePrice<'info> {
+    #[account(
+        mut,
+        constraint = vault_factory_info.strike > 0,
+        constraint = vault_factory_info.is_initialized == true,
+        constraint = vault_factory_info.emergency_mode == false
+    )]
+    pub vault_factory_info: Account<'info, CallOptionVaultFactoryInfo>,
+
+    #[account(
+        mut,
+        seeds=["CallOptionSettlePriceTicketInfo".as_bytes().as_ref(), vault_factory_info.key().as_ref(), ticket_owner.key().as_ref()],
+        bump,
+        close = ticket_owner,
+        constraint = update_ticket.is_used == false, 
+    )]
+    pub update_ticket: Account<'info, CallOptionSettlePriceTicketInfo>,
+
+    #[account(
+        mut
+    )]
+    pub ticket_owner: SystemAccount<'info>,
+
+    // Check if initializer is signer, should also be the oracle, mut is required to reduce lamports (fees)
+    #[account(
+        mut,
+        constraint = initializer.key() == ORACLE_ADDRESS
+    )]
+    pub initializer: Signer<'info>,
+
+    // System Program requred for deduction of lamports (fees)
+    pub system_program: Program<'info, System>
 
 }

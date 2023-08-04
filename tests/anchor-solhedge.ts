@@ -37,13 +37,14 @@ import {
   getUserTicketAccountAddressForCallVaultFactory,
   getCallSellersInVault,
   getCallSellersAsRemainingAccounts,
-  getMakerNextCallOptionVaultIdFromTx
-
+  getMakerNextCallOptionVaultIdFromTx,
+  getUserTakerInfoForCallVault,
+  getUserSettleTicketAccountAddressForCallVaultFactory
 } from "./accounts";
 import * as borsh from "borsh";
 import { getOraclePubKey, _testInitializeOracleAccount, updatePutOptionFairPrice, lastKnownPrice, updateCallOptionFairPrice } from "./oracle";
 import { snakeBTCMintAddr, snakeDollarMintAddr, mintSnakeDollarTo, mintSnakeBTCTo } from "./snake-minter-devnet";
-import { oracleAddr, updatePutOptionSettlePrice } from "./oracle";
+import { oracleAddr, updatePutOptionSettlePrice, updateCallOptionSettlePrice } from "./oracle";
 
 dotenv.config()
 
@@ -463,6 +464,133 @@ describe("anchor-solhedge-devnet", () => {
 
     });
 
+    xit("A CALL taker will now try to find vaults where he can enter", async () => {
+      const slippageTolerance = 0.05      
+      const vaultFactories = await getAllMaybeNotMaturedCallFactories(program)
+      console.log(`CallTaker ${callTakerKeypair.publicKey} will look at ${vaultFactories.length} maybe not matured CALL factories: `)
+      for (let vaultFactory of vaultFactories) { 
+        const maturity = vaultFactory.account.maturity.toNumber()
+        console.log(`Maturity of CALL VaultFactory ${vaultFactory.publicKey} is ${maturity}`)
+        if (
+          vaultFactory.account.quoteAsset.toString() == snakeDollarMintAddr.toString() && 
+          maturity > (Math.floor(Date.now()/1000) + FREEZE_SECONDS + 60)
+        ) {
+            // will only try to enter if there is at least 1 minute to freeze time
+          console.log("Getting vaults for CALL fault factory ", vaultFactory.publicKey.toString())
+          const vaults = await getVaultsForCallFactory(program, vaultFactory.publicKey)
+
+          for (let vault of vaults) {
+            if (!vault.account.isTakersFull) {
+              const myTakerInfo = await getUserTakerInfoForCallVault(program, vault.publicKey, callTakerKeypair.publicKey)
+              if (myTakerInfo.length > 0) {
+                continue
+              }
+              console.log(`CALL Taker ${callTakerKeypair.publicKey} is not in vault ${vault.publicKey} will try to enter`)
+              const ticketAddress = await getUserTicketAccountAddressForCallVaultFactory(program, vault.account.factoryVault, callTakerKeypair.publicKey)
+              const oracleAddress = getOraclePubKey()
+              console.log("CALL taker before paying oracle SOL balance is", await anchor.getProvider().connection.getBalance(callTakerKeypair.publicKey)/ anchor.web3.LAMPORTS_PER_SOL)
+              console.log("Oracle SOL balance is", await anchor.getProvider().connection.getBalance(oracleAddress)/ anchor.web3.LAMPORTS_PER_SOL)
+        
+              let tx6 = await program.methods.genUpdateCallOptionFairPriceTicket().accounts({
+                vaultFactoryInfo: vault.account.factoryVault,
+                initializer: callTakerKeypair.publicKey,
+                oracleWallet: oracleAddress,
+                callOptionFairPriceTicket: ticketAddress
+              }).signers([callTakerKeypair]).rpc()
+
+              console.log("CALL taker after paying oracle SOL balance is", await anchor.getProvider().connection.getBalance(callTakerKeypair.publicKey)/ anchor.web3.LAMPORTS_PER_SOL)    
+              console.log("Oracle SOL balance is", await anchor.getProvider().connection.getBalance(oracleAddress)/ anchor.web3.LAMPORTS_PER_SOL)
+                
+              let tx7 = await updateCallOptionFairPrice(program, vault.account.factoryVault, callTakerKeypair.publicKey)
+
+              console.log("Oracle SOL balance after updating fair price is", await anchor.getProvider().connection.getBalance(oracleAddress)/ anchor.web3.LAMPORTS_PER_SOL)
+              console.log("CALL taker after oracle using ticket SOL balance is", await anchor.getProvider().connection.getBalance(callTakerKeypair.publicKey)/ anchor.web3.LAMPORTS_PER_SOL)        
+              let updatedVaultFactory = await program.account.callOptionVaultFactoryInfo.fetch(vault.account.factoryVault)
+              console.log("Updated CALL option fair price is", updatedVaultFactory.lastFairPrice.toNumber())
+              const sellers = await getCallSellersInVault(program, vault.publicKey, updatedVaultFactory.lastFairPrice.toNumber(), slippageTolerance)
+
+              const vaultPendingSell = vault.account.makersTotalPendingSell.toNumber()
+              console.log('Total BASE asset volume pending sell ', vaultPendingSell)
+              const lotSize = (10**vault.account.lotSize)
+              const mintInfoBaseAsset = await token.getMint(program.provider.connection, vaultFactory.account.baseAsset)
+              const lamportsPerLot = lotSize*(10**mintInfoBaseAsset.decimals)
+              const lotsOnSell = Math.floor(vaultPendingSell/lamportsPerLot)
+              console.log(`There are at most ${lotsOnSell} lots on sell in CALL vault ${vault.publicKey}`)
+
+              let balanceQuoteAsset = await getTokenBalance(anchor.getProvider().connection, devnetPayerKeypair, vaultFactory.account.quoteAsset, callTakerKeypair.publicKey)
+              console.log(`CALL taker has ${balanceQuoteAsset} in quote asset lamports`)
+
+              // Lot price in in quote asset lamports
+              const lotPrice = Math.ceil(lotSize*vaultFactory.account.strike.toNumber())
+              const myMaxPrice = Math.floor(updatedVaultFactory.lastFairPrice.toNumber()*1.05)
+              const myMaxPremiumPricePerLot = lotSize*myMaxPrice
+
+              const maxLotsToBuy = Math.floor(balanceQuoteAsset/(lotPrice+myMaxPremiumPricePerLot))
+              const lotsToBuy = Math.min(lotsOnSell, maxLotsToBuy)
+              console.log(`CALL taker ${callTakerKeypair.publicKey} will try to buy ${lotsToBuy} lots`)
+              const remainingAccounts = await getCallSellersAsRemainingAccounts(lotsToBuy, program, sellers)
+              const protocolFeesUSDCATA = await createTokenAccount(anchor.getProvider().connection, devnetPayerKeypair, snakeDollarMintAddr, protocolFeesAddr)
+              const initialFunding = lotsToBuy*lotPrice
+              
+
+              let tx8 = await program.methods.takerBuyLotsCallOptionVault(
+                new anchor.BN(myMaxPrice), 
+                new anchor.BN(lotsToBuy), 
+                new anchor.BN(initialFunding)).accounts({
+                  baseAssetMint: snakeBTCMintAddr,
+                  quoteAssetMint: snakeDollarMintAddr,
+                  initializer: callTakerKeypair.publicKey,
+                  protocolQuoteAssetTreasury: protocolFeesUSDCATA.address,
+                  frontendQuoteAssetTreasury: protocolFeesUSDCATA.address, //also sending frontend share to protocol in this test
+                  takerQuoteAssetAccount: token.getAssociatedTokenAddressSync(snakeDollarMintAddr, callTakerKeypair.publicKey, false),
+                  vaultFactoryInfo: vaultFactory.publicKey,
+                  vaultInfo: vault.publicKey,
+                  vaultQuoteAssetTreasury: token.getAssociatedTokenAddressSync(snakeDollarMintAddr, vault.publicKey, true),
+                }).remainingAccounts(
+                  remainingAccounts
+                ).signers([callTakerKeypair]).rpc()
+                console.log(`Transaction id where CALL taker ${callTakerKeypair.publicKey} entered vault ${vault.publicKey}: `, tx8)
+            }
+          }
+        }
+      }
+    });
+
+    it(`Now CallMaker ${callMaker1Keypair.publicKey} will ask oracle to settle price on matured vaults he is in`, async () => {
+      const makerInfosAllVaults = await getUserMakerInfoAllCallVaults(program, callMaker1Keypair.publicKey)
+      let currEpoch = Math.floor(Date.now()/1000)
+
+      for (const makerInfo of makerInfosAllVaults) {
+        const vaultAddr = makerInfo.account.callOptionVault
+        const vaultInfo = await program.account.callOptionVaultInfo.fetch(vaultAddr)
+        const vaultFactoryInfo = await program.account.callOptionVaultFactoryInfo.fetch(vaultInfo.factoryVault)
+        if (!vaultFactoryInfo.matured && vaultFactoryInfo.maturity.toNumber() < currEpoch) {
+          console.log(`Call vault factory ${vaultInfo.factoryVault} has matured, will now ask oracle to settle price`)
+          const ticketAddress = await getUserSettleTicketAccountAddressForCallVaultFactory(program, vaultInfo.factoryVault, callMaker1Keypair.publicKey)
+          let ticketAccount = undefined
+          try {
+            ticketAccount = await program.account.callOptionSettlePriceTicketInfo.fetch(ticketAddress)
+            console.log('TICKET ACCOUNT IS')
+            console.log(ticketAccount)  
+          } catch(e) {
+            console.log('No previous ticket for settling this call vault factory found for this user')
+          }
+          
+          if (ticketAccount?.isUsed == undefined) {
+            const oracleAddress = getOraclePubKey()
+            let tx6 = await program.methods.genSettleCallOptionPriceTicket().accounts({
+              vaultFactoryInfo: vaultInfo.factoryVault,
+              initializer: callMaker1Keypair.publicKey,
+              oracleWallet: oracleAddress,
+              callOptionSettlePriceTicket: ticketAddress
+            }).signers([callMaker1Keypair]).rpc()
+            console.log('Transaction that generated CALL settle price ticket is ', tx6)  
+          }
+          const tx7 = await updateCallOptionSettlePrice(program, vaultInfo.factoryVault, callMaker1Keypair.publicKey)
+          console.log('Transaction where oracle updated settle price for call vault factory was ', tx7)
+        }
+      }
+    });    
 
     //---------------- CALL TESTS ENDED----------------/
     //---------------- STARTING PUT TESTS ----------------/
@@ -895,7 +1023,7 @@ describe("anchor-solhedge-devnet", () => {
         }
       }
     });
-    //---------------- ENDED PUT TESTS ----------------/
+    //---------------- PUT TESTS ENDED ----------------/
     
   }
 })

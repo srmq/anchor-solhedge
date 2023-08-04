@@ -157,6 +157,23 @@ export const getUserSettleTicketAccountAddressForPutVaultFactory = async (
   return ticketAccountAddress
 }
 
+export const getUserSettleTicketAccountAddressForCallVaultFactory = async (
+  program: anchor.Program<AnchorSolhedge>,
+  vaultFactoryInfo: anchor.web3.PublicKey,
+  user: anchor.web3.PublicKey
+) => {
+  const [ticketAccountAddress, _ticketAccountBump] = anchor.web3.PublicKey.findProgramAddressSync(
+    [
+      Buffer.from(anchor.utils.bytes.utf8.encode("CallOptionSettlePriceTicketInfo")),
+      vaultFactoryInfo.toBuffer(),
+      user.toBuffer()
+    ],
+    program.programId
+  )
+  return ticketAccountAddress
+}
+
+
 export const getUserTicketAccountAddressForCallVaultFactory = async (
   program: anchor.Program<AnchorSolhedge>,
   vaultFactoryInfo: anchor.web3.PublicKey,
@@ -383,6 +400,42 @@ export const getUserTakerInfoForPutVault = async(
     }
   ]
   const res = program.account.putOptionTakerInfo.all(filter)
+
+  return res
+}
+
+export const getUserTakerInfoForCallVault = async(
+  program: anchor.Program<AnchorSolhedge>,
+  vaultAddress: anchor.web3.PublicKey,
+  userAddress: anchor.web3.PublicKey,
+) => {
+
+  const filter = [
+    {
+      memcmp: {
+        offset: 8 + // Discriminator
+                1 + // is_initialized: bool
+                2 + // ord: u16
+                8 + // max_quote_asset: u64
+                8 + // qty_deposited: u64
+                1 + // is_settled: bool
+                32, // owner: Pubkey
+        bytes: vaultAddress.toBase58()
+      },
+    },
+    {
+      memcmp: {
+        offset: 8 + // Discriminator
+                1 + // is_initialized: bool
+                2 + // ord: u16
+                8 + // max_quote_asset: u64
+                8 + // qty_deposited: u64
+                1, // is_settled: bool
+        bytes: userAddress.toBase58()
+      },
+    }
+  ]
+  const res = program.account.callOptionTakerInfo.all(filter)
 
   return res
 }
